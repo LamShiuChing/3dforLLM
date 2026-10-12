@@ -1,5 +1,9 @@
 # CLAUDE.md — formcode
 
+> **STATUS (2026-10-12): read `HANDOFF.md` first.** Session 1 was research. Its findings are in `experiments/SUMMARY.md`,
+> and the new engine plan is `PLAN.md`, which **supersedes** the Blender-first design below and in `SPEC.md`
+> (rewrite pending the user's decisions). The text below is the original brief, kept until that rewrite.
+
 formcode is a headless 3D modeling engine designed for LLMs to use: a terse DSL in, compact text feedback out, Blender as a backend worker. **Read `SPEC.md` before doing anything** — it holds the architecture, DSL, tool surface and milestones.
 
 ## How to work
