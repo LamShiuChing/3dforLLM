@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>formcode experiments — mesh viewer</title>
+<script type="module" src="https://unpkg.com/@google/model-viewer@4.4.0/dist/model-viewer.min.js"></script>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #222; color: #ddd; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 8px; }
+  figure { margin: 0; background: #333; }
+  model-viewer { width: 100%; height: 45vh; background: #d9d9d9; }
+  figcaption { padding: 6px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <figure><model-viewer src="anime_v08.glb" camera-controls auto-rotate shadow-intensity="1" exposure="1.1"></model-viewer>
+    <figcaption>anime head v08 (from the Anima reference) - drag to rotate</figcaption></figure>
+  <figure><img src="anime_reference.png" style="width:100%"><figcaption>the reference (Anima, seed 1)</figcaption></figure>
+  <figure><img src="cmp_v08.png" style="width:100%"><figcaption>model with reference lines in red (top) vs reference (bottom)</figcaption></figure>
+  <figure><model-viewer src="face_v07.glb" camera-controls auto-rotate shadow-intensity="1" exposure="1.1"></model-viewer>
+    <figcaption>exp03 face v07 (latest) — drag to rotate, scroll to zoom</figcaption></figure>
+  <figure><model-viewer src="human_v04.glb" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+    <figcaption>exp02 human body v04</figcaption></figure>
+  <figure><model-viewer src="face_v04.glb" camera-controls auto-rotate shadow-intensity="1"></model-viewer>
+    <figcaption>exp03 face v04 (before the fixes)</figcaption></figure>
+</div>
+</body>
+</html>

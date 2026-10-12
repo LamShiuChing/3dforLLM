@@ -1,0 +1,13 @@
+[project]
+name = "formcode"
+version = "0.0.0"
+description = "Headless 3D modeling engine for LLMs"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
