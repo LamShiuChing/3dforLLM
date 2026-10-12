@@ -70,9 +70,14 @@ The face reports `warnings: none`. The sense found things nobody had noticed:
 Following the anime hint on a scratch copy (spline-resampling `FRONT_OUTLINE`) cut kink samples 62 → 14 and removed most of the banding.
 The example itself is unchanged: it is the frozen exp04 result.
 
+**Steps 2 + 3, done: versions, diff report, auto-revert, run log** (SPEC §7, `formcode/versions.py`).
+- `senses.measure()` returns the report as data; `report()` formats it (goldens unchanged).
+- Every render run saves `runs/<scene>/vNNN.py` + `.json`; the JSON is the run log (tokens, warnings, seconds, all metrics), so step 3 is merged into it.
+- A new warning key, or worst profile dev / landmark drift sum worse by >0.5 mm, reverts the scene and keeps the run as `vNNN-rejected`; `--keep` accepts.
+- Checked on a scratch face copy: ear `flare` 0.004 → 0.010 was accepted (`seating ear 58%->45%`), → 0.016 was reverted (`+WARN seating ear`, 33%).
+- Open: a seating drop that stays above the 40% warning is not a regression; kink keys include `near <landmark>`, so a cluster that moves to another landmark counts as new.
+
 **Next steps:**
-2. Versions and auto-revert: `runs/<scene>/vNN` (scene + report) and a diff vs the previous version. When warnings or fit error get worse, revert and say so.
-3. Run log: tokens, warnings and time per run.
 4. Relative placement: sculpt points become (x, y), with depth cast onto the skin.
 5. Rebuild the face with the new vocabulary, and measure tokens, iterations and defects against session 1.
 

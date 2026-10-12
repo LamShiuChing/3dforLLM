@@ -55,6 +55,7 @@ A scene may edit `TYPICAL` (the scale-lint table). The edit is reset before the 
   - `ear(f, tragion=(y,z), flare, size, splay)`: x is snapped onto the head. The ear registers for the seating sense.
 
 ## 6. Senses (`formcode.senses.report`)
+`senses.measure(mod)` returns every sense as data (JSON-ready dict: `warnings` as (key, text) pairs with key = kind + subject, `bbox`, `components`, `symmetry_err`, `clipped`, `seating`, `kinks`, `fit`/`drift`/`profile` in mm, and the measurement `lines`); `report(mod)` = `text(measure(mod))`.
 One text block, every check on every run. **Warnings come first**, then `--`, then measurements:
 ```
 WARN loose piece (<part>) at x,y,z vox=n: not connected to the body
@@ -83,15 +84,28 @@ Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.co
 
 ## 7. CLI
 ```
-python -m formcode scene.py out.png [cx,cy,cz,half]   render grid + report (+ scene size in tokens)
-python -m formcode scene.py out.glb [res]             marching-cubes mesh over FRAME (needs formcode[mesh])
+python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   render grid + report + version (formcode.versions.run)
+python -m formcode scene.py out.glb [res]                      marching-cubes mesh over FRAME (needs formcode[mesh]); no version
 ```
+**Versions.** Every render run saves `<scene_dir>/runs/<stem>/vNNN.py` (source) and `vNNN.json` (the run log: version, status baseline|accepted|kept|rejected, time, chars, tokens = chars//4, seconds, warning count, `metrics` = `measure()`). An unchanged scene makes no new version. After the report:
+```
+vs v003: +WARN kinks midline near nasion | -WARN seating ear | worst profile dev 2.0->1.4mm | landmark drift sum 7.8->6.1mm | seating ear 32%->58%
+vs v003: no measurable change
+run v004: ~T tokens, W warnings, S s
+```
+Values are listed only when their printed form changes (0.1 mm, 1%). Landmark drift sum = Σ|drift| over non-`_R` landmarks.
+**Auto-revert.** A run is a regression vs the previous accepted version if it adds a warning key (kind + subject, e.g. `loose piece (moon)`, `seating ear`, `kinks midline near nasion`; counts in the text don't matter), or the worst |profile dev| or the landmark drift sum grows by more than 0.5 mm. Then it is saved as `vNNN-rejected`, the scene file is restored to the previous accepted source, and the output starts with
+```
+REGRESSED vs v003 -> scene reverted (kept as v004-rejected). Re-run with --keep to accept.
+why: +WARN loose piece (moon)
+```
+The render shows the rejected version. `--keep` accepts a regression (status `kept`); run right after a revert on the untouched scene, it restores the rejected source and accepts it.
 
 ## 8. Repo layout
 ```
-formcode/     kernel.py render.py senses.py __main__.py
-examples/     dragon.py human.py face.py anime.py   (final scenes from experiments 01–04)
-tests/        test_kernel.py, test_examples.py + golden/ (report text + 64 px renders per example)
+formcode/     kernel.py render.py senses.py versions.py __main__.py
+examples/     dragon.py human.py face.py anime.py   (final scenes from experiments 01–04; runs/ is git-ignored)
+tests/        test_kernel.py, test_versions.py, test_examples.py + golden/ (report text + 64 px renders per example)
 experiments/  session-1 research: lab code, every iteration, findings (frozen; not imported by the package)
 later/        Blender M0 scaffolding, parked for P6
 ```

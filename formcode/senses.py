@@ -108,26 +108,30 @@ def _kink_warnings(K, h, L, parts):
         hint = "  (mirror seam: the shape is not smooth across x=0)" if side == "midline" else ""
         if any((np.abs(polygon2d(pts[:, :2], V)) < 2 * h).mean() > 0.5 for V in kernel.TRIMS):
             hint = "  (on the front_outline trim: its polygon corners crease the surface; smooth the outline or raise k)"
-        out.append(f"WARN kinks: {sel.sum()} creased samples, {side}{near}, box {mm(lo)}..{mm(hi)}mm{hint}")
+        out.append((f"kinks {side}{near}", f"WARN kinks: {sel.sum()} creased samples, {side}{near}, box {mm(lo)}..{mm(hi)}mm{hint}"))
         if len(out) == 3:
             break
     return out
 
 
-def report(mod, n=96):
+def measure(mod, n=96):
+    """Every sense as data. warnings: (key, text) pairs, key = kind + subject (for diffs); lines: the measurement text."""
     c, half = frame(mod)
     g = _grid(c, half, n)
     h = 2 * half / (n - 1)
     vox = h ** 3
     d = mod.sdf(g)
     warns, lines = [], []
+    M = {"bbox": {}, "seating": {}, "kinks": None, "fit": {}, "drift": {}, "profile": {}}
     parts = getattr(mod, "PARTS", {})
     for name, f in [("ALL", None)] + list(parts.items()):
         inside = g[(d if f is None else f(g)) < 0]
         if not len(inside):
             lines.append(f"{name}: empty")
+            M["bbox"][name] = None
             continue
         lo, hi = inside.min(0), inside.max(0)
+        M["bbox"][name] = [round(float(x), 4) for x in (*lo, *hi)]
         lines.append(f"{name}: min={fmt(lo)} max={fmt(hi)} size={fmt(hi - lo)} vol={len(inside) * vox:.3f}")
     lab_, k = ndimage.label((d < 0).reshape(n, n, n))
     thin = 0
@@ -144,7 +148,7 @@ def report(mod, n=96):
                 thin += 1
                 continue
             owner = min(parts.items(), key=lambda kv: kv[1](pts).mean(), default=("?", None))[0]
-            warns.append(f"WARN loose piece ({owner}) at {fmt(pts.mean(0))} vox={len(pts)}: not connected to the body")
+            warns.append((f"loose piece ({owner})", f"WARN loose piece ({owner}) at {fmt(pts.mean(0))} vox={len(pts)}: not connected to the body"))
     lines.append(f"components={k}" + (f" ({thin} attached by necks thinner than {h * 1000:.0f}mm)" if thin else ""))
     band = 0.03 * half
     shell = np.abs(d) < band
@@ -152,24 +156,28 @@ def report(mod, n=96):
     m[:, 0] *= -1
     over = np.abs(g[d < 0] - c) > half - band
     clipped = bool(over.any())
-    lines.append(f"symmetry_err(x)={np.abs(mod.sdf(m) - d[shell]).mean():.4f}  clipped_at_bound={clipped}")
+    sym = np.abs(mod.sdf(m) - d[shell]).mean()
+    M.update(components=int(k), thin_necks=thin, symmetry_err=float(sym), clipped=clipped)
+    lines.append(f"symmetry_err(x)={sym:.4f}  clipped_at_bound={clipped}")
     if clipped:
         P = g[d < 0][over.any(1)] - c
-        sides = sorted({("-+"[int(v > 0)] + "xyz"[i]) for i in range(3) for v in P[np.abs(P[:, i]) > half - band, i]})
-        warns.append(f"WARN clipped at FRAME {' '.join(sides)}: the model extends past it (open mesh); grow or move FRAME")
+        sides = " ".join(sorted({("-+"[int(v > 0)] + "xyz"[i]) for i in range(3) for v in P[np.abs(P[:, i]) > half - band, i]}))
+        warns.append((f"clipped at FRAME {sides}", f"WARN clipped at FRAME {sides}: the model extends past it (open mesh); grow or move FRAME"))
 
     for name, (part, host) in {nm: (pa, hh) for nm, pa, hh in kernel.ATTACHED}.items():
         frac = seating(part, host)
+        M["seating"][name] = frac
         lines.append(f"seating {name}: {frac:.0%} of surface in contact")
         if frac < 0.40:
-            warns.append(f"WARN seating {name}: only {frac:.0%} in contact: stuck on / floating (attached ears measure ~55-60%)")
-    warns += [f"WARN scale: {x}" for x in dict.fromkeys(kernel.LINT)]
+            warns.append((f"seating {name}", f"WARN seating {name}: only {frac:.0%} in contact: stuck on / floating (attached ears measure ~55-60%)"))
+    warns += [("scale: " + " ".join(x.split()[:2]), f"WARN scale: {x}") for x in dict.fromkeys(kernel.LINT)]
 
     K, total = kinks(mod.sdf, g, d, h)
     if len(K):
         R = np.zeros(len(K), bool)
         for P_, r in kernel.EDGES:
             R |= np.linalg.norm(K[:, None] - P_[None], axis=-1).min(1) < r
+        M["kinks"] = {"creased": len(K), "samples": total, "intended": int(R.sum())}
         lines.append(f"kinks: {len(K)} of {total} surface samples creased ({R.sum()} at intended edges)")
         if kernel.DETAIL:
             lines[-1] += f"; {', '.join(sorted(kernel.DETAIL))} detail: kinks expected, not warned"
@@ -177,12 +185,14 @@ def report(mod, n=96):
             warns += _kink_warnings(K[~R], h, getattr(mod, "LANDMARKS", {}), getattr(mod, "PARTS", {}))
     corr = getattr(mod, "FIT_CORRECTIONS", {})
     if corr:
+        M["fit"] = {k: float(v) * 1000 for k, v in corr.items()}
         top = sorted(corr.items(), key=lambda kv: -abs(kv[1]))[:5]
         lines.append("fit: base was off by " + ", ".join(f"{k} {v * 1000:+.1f}mm" for k, v in top))
     L = getattr(mod, "LANDMARKS", {})
     if L:
         names = list(L)
         dl = mod.sdf(np.array([L[k] for k in names]))
+        M["drift"] = {k: float(v) * 1000 for k, v in zip(names, dl) if not k.endswith("_R")}
         off = [(k, v) for k, v in zip(names, dl) if abs(v) > 0.0005 and not k.endswith("_R")]
         lines.append("landmark drift (>0.5mm, +out/-in): " + (", ".join(f"{k} {v * 1000:+.1f}" for k, v in off) or "none"))
     prof = getattr(mod, "PROFILE", [])
@@ -193,5 +203,15 @@ def report(mod, n=96):
             dev = mod.sdf(spline(np.array([pa, pb]), 0.001))
             i = int(np.argmax(np.abs(dev)))
             worst.append((abs(dev[i]), f"{a}->{b} {dev[i] * 1000:+.1f}mm"))
+            M["profile"][f"{a}->{b}"] = float(dev[i]) * 1000
         lines.append("profile max dev: " + ", ".join(s for v, s in sorted(worst, reverse=True)[:4]))
-    return "\n".join((warns or ["warnings: none"]) + ["--"] + lines)
+    return dict(M, warnings=warns, lines=lines)
+
+
+def text(m):
+    """The report: warnings first, then measurements."""
+    return "\n".join(([t for _, t in m["warnings"]] or ["warnings: none"]) + ["--"] + m["lines"])
+
+
+def report(mod, n=96):
+    return text(measure(mod, n))

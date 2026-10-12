@@ -1,23 +1,17 @@
-"""usage: python -m formcode scene.py out.png [cx,cy,cz,half]   (render + text report)
-       python -m formcode scene.py out.glb [res]              (mesh export over the scene's FRAME)"""
+"""usage: python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   (render + report + version; --keep accepts a regression)
+       python -m formcode scene.py out.glb [res]                       (mesh export over the scene's FRAME)"""
 import sys
 import time
 
-from .render import export_mesh, load, render
-from .senses import report
+from .render import export_mesh
+from .versions import run
 
-if len(sys.argv) < 3:
+args = [a for a in sys.argv[1:] if a != "--keep"]
+if len(args) < 2:
     sys.exit(__doc__)
-scene, out = sys.argv[1], sys.argv[2]
-t0 = time.time()
+scene, out = args[:2]
 if out.endswith(".glb"):
-    print(export_mesh(scene, out, int(sys.argv[3]) if len(sys.argv) > 3 else 320), f"{time.time() - t0:.1f}s")
+    t0 = time.time()
+    print(export_mesh(scene, out, int(args[2]) if len(args) > 2 else 320), f"{time.time() - t0:.1f}s")
     sys.exit()
-if len(sys.argv) > 3:  # zoom
-    *c, h = map(float, sys.argv[3].split(","))
-    render(scene, out, center=c, half=h)
-else:
-    render(scene, out)
-print(report(load(scene)))
-src = open(scene, encoding="utf-8").read()
-print(f"render+report {time.time() - t0:.1f}s, scene {len(src)} chars (~{len(src) // 4} tokens)")
+print(run(scene, out, keep="--keep" in sys.argv, zoom=[float(x) for x in args[2].split(",")] if len(args) > 2 else None))
