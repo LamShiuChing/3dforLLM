@@ -86,7 +86,9 @@ Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.co
 ```
 python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   render grid + report + version (formcode.versions.run)
 python -m formcode scene.py out.glb [res]                      marching-cubes mesh over FRAME (needs formcode[mesh]); no version
+python -m formcode repl                                         engine commands (PROTOCOL.md) from stdin; one batch per line, a trailing \ continues it
 ```
+`scene` may also be a `.fc` command script (`formcode.engine`): `render.load` builds it, with an automatic FRAME.
 **Versions.** Every render run saves `<scene_dir>/runs/<stem>/vNNN.py` (source) and `vNNN.json` (the run log: version, status baseline|accepted|kept|rejected, time, chars, tokens = chars//4, seconds, warning count, `metrics` = `measure()`). An unchanged scene makes no new version. After the report:
 ```
 vs v003: +WARN kinks midline near nasion | -WARN seating ear | worst profile dev 2.0->1.4mm | landmark drift sum 7.8->6.1mm | seating ear 32%->58%
@@ -103,7 +105,7 @@ The render shows the rejected version. `--keep` accepts a regression (status `ke
 
 ## 8. Repo layout
 ```
-formcode/     kernel.py render.py senses.py versions.py __main__.py
+formcode/     kernel.py render.py senses.py versions.py engine.py (PROTOCOL.md: nodes, parser, staged build, REPL) __main__.py
 examples/     dragon.py human.py face.py anime.py   (final scenes from experiments 01–04; runs/ is git-ignored)
 tests/        test_kernel.py, test_versions.py, test_examples.py + golden/ (report text + 64 px renders per example)
 experiments/  session-1 research: lab code, every iteration, findings (frozen; not imported by the package)
@@ -115,6 +117,7 @@ later/        Blender M0 scaffolding, parked for P6
 |---|---|---|
 | **P0 ✓** | Lab → `formcode` package (kernel, renderer, senses) with tests | the experiments reproduce from the package (all 20 views pixel-identical to the lab; golden tests) |
 | P1 | **Always-on engine + protocol** (`PROTOCOL.md`). Already built: warnings (step 1) and versions/auto-revert (step 2) | PROTOCOL.md §10: face rebuilt through the protocol only, zero absolute placements, ≤150-token replies, ≤2 s median edit, auto-revert with a working fix, measured against session 1 |
+| P1.5 | **Production test run** (early test of P6): face → curve-guided quad remesh (headless Blender `quadriflow_remesh` or QuadriFlow / Instant Meshes) → UVs (xatlas) → normal map baked from the SDF → open in Blender. The engine drives it via `export(..., target=)`; the LLM never touches Blender | measured: quad %, closed loops around the eyes and mouth, UV stretch, bake error vs the SDF; go/no-go on semantic guidance before P2–P5 |
 | P2 | Full sculpt brush set (flatten, smooth, pinch, grab, clay, layer) with per-stroke reports and bounded slopes | a nose/ear redo with no jagged junctions |
 | P3 | Anatomy pack: body landmarks, muscles between joints, skin over them, scale lint in head units | full human with face and visible musculature, judged against exp02 |
 | P4 | Fabric: garment panels + seams → small cloth sim on the body | a shirt with physically plausible folds |
