@@ -1,7 +1,13 @@
+WARN seating ear: only 32% in contact: stuck on / floating (attached ears measure ~55-60%)
+WARN kinks: 34 creased samples, both sides, box +37,-78,-17..+59,-39,+40mm  (on the front_outline trim: its polygon corners crease the surface; smooth the outline or raise k)
+WARN kinks: 28 creased samples, both sides, box +66,+29,-32..+69,+40,+40mm  (on the front_outline trim: its polygon corners crease the surface; smooth the outline or raise k)
+WARN kinks: 5 creased samples, midline near menton, box +1,-87,+62..+2,-78,+83mm  (mirror seam: the shape is not smooth across x=0)
+--
 ALL: min=-0.08,-0.19,-0.09 max=+0.08,+0.13,+0.10 size=+0.16,+0.31,+0.19 vol=0.004
 components=1
 symmetry_err(x)=0.0000  clipped_at_bound=False
-seating ear: 32% of surface in contact  << stuck-on / floating (attached ears measure ~55-60%)
+seating ear: 32% of surface in contact
+kinks: 101 of 3000 surface samples creased (31 at intended edges)
 fit: base was off by under_jaw -7.0mm, throat -6.4mm, back_upper +6.1mm, nape -5.7mm, upper_lip +3.8mm
 landmark drift (>0.5mm, +out/-in): stomion +0.6, lower_lip -0.6
 profile max dev: under_jaw->throat +1.8mm, menton->under_jaw +1.7mm, chin_front->menton -1.3mm, lower_lip->chin_front -0.9mm

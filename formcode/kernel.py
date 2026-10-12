@@ -102,6 +102,7 @@ def voronoi(p, cell, seed=0):
 
 def near_surface(d, p, fn, band=0.03):
     """Apply a detail function fn(p_subset) -> offset only near the surface (keeps detail cheap)."""
+    DETAIL.add("near_surface")
     m = np.abs(d) < band
     d = d.copy()
     d[m] += fn(p[m])
@@ -182,6 +183,14 @@ TYPICAL = {    # anatomy-scale lint: name -> (measure, lo, hi) in meters (adult)
     "ear": ("length", 0.055, 0.068),
 }
 LINT = []
+EDGES = []      # (points (M,3), radius): where sharp edges are intended (grooves, carves, eyes, ears); the kink sense skips them
+DETAIL = set()  # surface-detail functions in use (near_surface): kinks are expected everywhere
+TRIMS = []      # front_outline polygons (M,2): their corners crease the surface, so kink warnings name them as the cause
+
+
+def _edge(points, radius, sym):
+    P = np.atleast_2d(np.asarray(points, float))
+    EDGES.append((np.vstack([P, P * (-1, 1, 1)]) if sym else P, float(radius)))
 
 
 def _lint(name, measure, value):
@@ -198,6 +207,9 @@ def reset():
     """Clear what the last scene registered (called before each scene load; a scene may edit TYPICAL)."""
     ATTACHED.clear()
     LINT.clear()
+    EDGES.clear()
+    DETAIL.clear()
+    TRIMS.clear()
     TYPICAL.clear()
     TYPICAL.update(_TYPICAL0)
 
@@ -234,11 +246,14 @@ def sculpt(f, ops):
             built.append((kind, np.asarray(pts[0], float), amount, width, sym))
             _lint(name, "length", 2 * max(amount))
             _lint(name, "width", 2 * min(amount))
+            _edge(pts[0], 1.5 * (max(amount) + width), sym)
             continue
         C = spline(on_surface(f, pts), width / 2) if kind in ("crease", "ridge", "groove") else on_surface(f, pts)
         _lint(name, "width", width)
         _lint(name, "length", float(np.linalg.norm(np.diff(C, axis=0), axis=1).sum()))
         reach = width + (amount if kind == "groove" else 0)
+        if kind == "groove":
+            _edge(C, max(2 * reach, 0.002), sym)
         lo, hi = C.min(0) - reach, C.max(0) + reach
         built.append((kind, C, amount, width, sym, lo, hi))
 
@@ -289,6 +304,7 @@ def front_outline(f, halfwidths, k=0.006):
     right = [(w, y) for y, w in hw]
     top, bot = hw[0, 0] + 1.0, hw[-1, 0] - 1.0
     V = np.array([(5.0, top)] + right + [(hw[-1, 1], bot), (-hw[-1, 1], bot)] + [(-w, y) for w, y in right[::-1]] + [(-5.0, top)])
+    TRIMS.append(V)
     return lambda p: smax(f(p), polygon2d(p[:, :2], V), k)
 
 
@@ -306,6 +322,7 @@ def eye(f, center, r, en, ex, up, lo, lid=0.0018, recess=0.0005):
     en/ex = inner/outer canthus, up = upper-lid peak, lo = lower-lid low point (x,y used; the eye looks along +z)."""
     skin_z = cast(f, (center[0], center[1], 0.3), (0, 0, -1))[0, 2]
     c = np.array([center[0], center[1], skin_z - 1.1 * r - recess])
+    _edge(c, 2 * r, True)
     _lint("eye_fissure", "length", float(np.hypot(ex[0] - en[0], ex[1] - en[1])))
     cu, ru = _circle3(en[:2], up[:2], ex[:2])
     cl, rl = _circle3(en[:2], lo[:2], ex[:2])
@@ -340,6 +357,7 @@ def ear(f, tragion, flare=0.004, size=1.0, splay=0.0):
         return smin(smin(cut(cut(shell, concha, 0.003), scapha, 0.002), lobe, 0.004), root, 0.004)
 
     ATTACHED.append(("ear", part, f))
+    _edge(t, 0.04 * size, True)
     return lambda p: smin(f(p), part(p), 0.005)
 
 

@@ -54,12 +54,33 @@ Image models (ComfyUI) are acceptable only as an *input* (e.g. a reference sheet
 11. **LLM sculpting is barely explored.** Prior art: ViSculpt 2026 (GUI mouse actions). Our "stroke = one line of text
     on anatomical curves" approach appears new.
 
-## Next: P1 (SPEC §9)
-Make relative placement the default and put always-on warnings at the top of the report. Add versions/checkpoints, a diff report per change,
-and auto-revert when warnings or fit error get worse. **Done when** the face is rebuilt with zero absolute depths and auto-revert
-triggers on a seeded regression. Also start logging tokens and iterations per run; that is the eval baseline.
-Known rough edges to look at: bounding boxes print in cm (2 decimals in meters), which is coarse for a face; the dragon reports
-components=10, all fragments below 4 voxels, so they are silently skipped; the landmark labels clutter the side view.
+## P1 progress (SPEC §9)
+Goal: the face rebuilt with zero absolute depths, and auto-revert triggers on a seeded regression.
+
+**Step 1, done: warnings at the top of the report** (SPEC §6). Results:
+- loose pieces are rechecked 8x finer, so the dragon's 9 and the human's 2 thin-neck fragments are no longer false alarms;
+- a new kink sense with an intended-edge registry and cause hints;
+- clipping, seating and scale lint are now warnings.
+
+The face reports `warnings: none`. The sense found things nobody had noticed:
+- anime: front_outline trim creases (the side "stripes"), plus a stuck-on ear;
+- human: a mirror seam along the crotch and spine;
+- dragon: the neck is clipped at the back of FRAME.
+
+Following the anime hint on a scratch copy (spline-resampling `FRONT_OUTLINE`) cut kink samples 62 → 14 and removed most of the banding.
+The example itself is unchanged: it is the frozen exp04 result.
+
+**Next steps:**
+2. Versions and auto-revert: `runs/<scene>/vNN` (scene + report) and a diff vs the previous version. When warnings or fit error get worse, revert and say so.
+3. Run log: tokens, warnings and time per run.
+4. Relative placement: sculpt points become (x, y), with depth cast onto the skin.
+5. Rebuild the face with the new vocabulary, and measure tokens, iterations and defects against session 1.
+
+**Rough edges:**
+- bounding boxes print in cm (2 decimals in meters);
+- the landmark labels clutter the side view;
+- kinks below 4 degrees are missed (gentle facets still shade visibly);
+- the kink sense adds about 4 s to a face report (34 s total with render).
 
 ## How to run things (Windows 11, Git Bash)
 - venv: `.venv` (Python 3.12, numpy, pillow, scipy, scikit-image, trimesh, pytest), created with `uv venv --python 3.12`;

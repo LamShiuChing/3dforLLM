@@ -55,18 +55,30 @@ A scene may edit `TYPICAL` (the scale-lint table). The edit is reset before the 
   - `ear(f, tragion=(y,z), flare, size, splay)`: x is snapped onto the head. The ear registers for the seating sense.
 
 ## 6. Senses (`formcode.senses.report`)
-One text block, every check on every run:
+One text block, every check on every run. **Warnings come first**, then `--`, then measurements:
 ```
+WARN loose piece (<part>) at x,y,z vox=n: not connected to the body
+WARN clipped at FRAME +x -z: the model extends past it (open mesh); grow or move FRAME
+WARN seating <part>: only n% in contact: stuck on / floating
+WARN scale: <name> <measure> n mm (typical a-b)
+WARN kinks: n creased samples, <midline|both sides|left|right> [near <landmark>|on <part>], box x,y,z..x,y,z mm  (cause hint)
+warnings: none                             (when there are none)
+--
 ALL: min=… max=… size=… vol=…            (+ one line per PART)
-FLOATING piece (<part>) at x,y,z vox=n   (pieces not connected to the main body)
-components=n
+components=n (k attached by necks thinner than the grid)
 symmetry_err(x)=…  clipped_at_bound=…
-seating <part>: n% of surface in contact  (<< flagged below 40%)
-scale lint: <name> <measure> n mm (typical a-b)
+seating <part>: n% of surface in contact
+kinks: n of m surface samples creased (k at intended edges)
 fit: base was off by <landmark> ±n mm, …  (top 5)
 landmark drift (>0.5mm, +out/-in): …
 profile max dev: <a>-><b> ±n mm, …        (worst 4)
 ```
+- **Loose pieces:** every component that is not the main body gets rechecked on a grid 8× finer around the gap. Pieces joined by a thin neck are counted as attached and don't produce a warning.
+- **Kinks** (C1 creases): on 3000 surface samples, the normal is traced along short lines across the surface. A kink is where one tiny step carries most of the turn; smooth curvature spreads it evenly. Kinks are clustered with mirrored pairs merged, and up to 3 clusters are warned. Cause hints:
+  - *mirror seam*: the cluster sits on x=0;
+  - *front_outline trim*: the cluster sits on a trim polygon.
+- **Intended edges:** kernel functions that make sharp edges on purpose register themselves in `kernel.EDGES` (groove and carve strokes, `eye`, `ear`), and kinks there are not warned. When `near_surface` detail is in use, kinks are expected everywhere, so they are counted but not warned.
+
 Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.compare(a, b, out)` puts two images side by side.
 
 ## 7. CLI

@@ -34,7 +34,7 @@ def test_floating_part_is_reported(tmp_path):
                      "sdf = lambda p: np.minimum(body(p), moon(p))\n"
                      "PARTS = {'body': body, 'moon': moon}\n", encoding="utf-8")
     rep = report(load(scene))
-    assert "FLOATING piece (moon)" in rep and "components=2" in rep
+    assert rep.startswith("WARN loose piece (moon)") and "components=2" in rep
 
 
 def test_load_resets_registries(tmp_path):
@@ -46,3 +46,37 @@ def test_load_resets_registries(tmp_path):
     load(tmp_path / "s.py")
     K.reset()
     assert "ear" in K.TYPICAL and not K.LINT
+
+
+def scene(tmp_path, body):
+    path = tmp_path / "s.py"
+    path.write_text("from formcode import *\n" + body + "\n", encoding="utf-8")
+    return report(load(path))
+
+
+def test_thin_neck_is_not_loose(tmp_path):
+    # a 4 mm wire joins two balls: thinner than the 21 mm report grid, but attached
+    rep = scene(tmp_path, "sdf = lambda p: np.minimum(np.minimum(sphere(p, (-0.4, 0, 0), 0.2), sphere(p, (0.4, 0, 0), 0.2)),"
+                          " capsule(p, (-0.3, 0, 0), (0.3, 0, 0), 0.004))")
+    assert "loose" not in rep and "attached by necks" in rep
+
+
+def test_kinks_found_on_hard_edges_not_on_smooth_shapes(tmp_path):
+    assert scene(tmp_path, "sdf = lambda p: ellipsoid(p, (0, 0, 0), (0.5, 0.3, 0.4))").startswith("warnings: none")
+    rep = scene(tmp_path, "sdf = lambda p: box(p, (0, 0, 0), (0.4, 0.3, 0.3))")
+    assert "WARN kinks" in rep
+
+
+def test_kinks_at_intended_edges_are_not_warned(tmp_path):
+    rep = scene(tmp_path, "sdf = sculpt(lambda p: sphere(p, (0, 0, 0), 0.5), "
+                          "[('slit', 'groove', [(-0.2, 0, 0.46), (0, 0, 0.5), (0.2, 0, 0.46)], 0.01, 0.002, False)])")
+    assert "WARN kinks" not in rep and "at intended edges" in rep
+
+
+def test_front_outline_kinks_name_the_trim(tmp_path):
+    rep = scene(tmp_path, "sdf = front_outline(lambda p: sphere(p, (0, 0, 0), 0.6), [(0.5, 0.3), (0.0, 0.45), (-0.5, 0.3)], k=0.001)")
+    assert "front_outline trim" in rep
+
+
+def test_clipping_is_warned(tmp_path):
+    assert "WARN clipped at FRAME +x" in scene(tmp_path, "sdf = lambda p: sphere(p, (0.5, 0, 0), 0.6)")
