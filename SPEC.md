@@ -114,7 +114,7 @@ later/        Blender M0 scaffolding, parked for P6
 | # | Milestone | Done when |
 |---|---|---|
 | **P0 ✓** | Lab → `formcode` package (kernel, renderer, senses) with tests | the experiments reproduce from the package (all 20 views pixel-identical to the lab; golden tests) |
-| P1 | Relative placement everywhere, always-on warnings at the top, versions + diff report + auto-revert | the face rebuilt with zero absolute depths; auto-revert triggers on a seeded regression |
+| P1 | **Always-on engine + protocol** (`PROTOCOL.md`). Already built: warnings (step 1) and versions/auto-revert (step 2) | PROTOCOL.md §10: face rebuilt through the protocol only, zero absolute placements, ≤150-token replies, ≤2 s median edit, auto-revert with a working fix, measured against session 1 |
 | P2 | Full sculpt brush set (flatten, smooth, pinch, grab, clay, layer) with per-stroke reports and bounded slopes | a nose/ear redo with no jagged junctions |
 | P3 | Anatomy pack: body landmarks, muscles between joints, skin over them, scale lint in head units | full human with face and visible musculature, judged against exp02 |
 | P4 | Fabric: garment panels + seams → small cloth sim on the body | a shirt with physically plausible folds |

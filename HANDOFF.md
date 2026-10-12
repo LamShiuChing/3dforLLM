@@ -55,7 +55,9 @@ Image models (ComfyUI) are acceptable only as an *input* (e.g. a reference sheet
     on anatomical curves" approach appears new.
 
 ## P1 progress (SPEC §9)
-Goal: the face rebuilt with zero absolute depths, and auto-revert triggers on a seeded regression.
+**Reframed on 2026-10-12 (user):** P1 is now the **always-on engine + protocol** in `PROTOCOL.md` (decisions accepted).
+The engine does the heavy lifting: after every change it rebuilds, checks, versions, reverts, and tests fixes.
+The LLM only says what, where and what it's called. Steps 1 and 2 below are reused inside the engine loop.
 
 **Step 1, done: warnings at the top of the report** (SPEC §6). Results:
 - loose pieces are rechecked 8x finer, so the dragon's 9 and the human's 2 thin-neck fragments are no longer false alarms;
@@ -77,9 +79,13 @@ The example itself is unchanged: it is the frozen exp04 result.
 - Checked on a scratch face copy: ear `flare` 0.004 → 0.010 was accepted (`seating ear 58%->45%`), → 0.016 was reverted (`+WARN seating ear`, 33%).
 - Open: a seating drop that stays above the 40% warning is not a regression; kink keys include `near <landmark>`, so a cluster that moves to another landmark counts as new.
 
-**Next steps:**
-4. Relative placement: sculpt points become (x, y), with depth cast onto the skin.
-5. Rebuild the face with the new vocabulary, and measure tokens, iterations and defects against session 1.
+**Build plan for the engine (PROTOCOL.md §10 is the finish line):**
+- A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
+- B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.
+- C. Goals and fixes: `seat`, `solve`, fix search.
+- D. Speed: persistent caches, dirty-region checks, warm render pool; `look`, `measure`, `report`.
+- E. MCP server (`formcode[mcp]`, one tool).
+- F. Rebuild the face through the protocol and measure against session 1.
 
 **Rough edges:**
 - bounding boxes print in cm (2 decimals in meters);
