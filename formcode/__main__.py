@@ -1,15 +1,16 @@
 """usage: python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   (render + report + version; --keep accepts a regression)
        python -m formcode scene.py out.glb [res]                       (mesh export over the scene's FRAME)
-       python -m formcode repl                                         (engine commands from stdin, one batch per line)"""
+       python -m formcode repl [--allow-code]                          (engine commands from stdin, one batch per line;
+                                                                        --allow-code enables code() and opening .py scenes)"""
 import sys
 import time
 
 from .render import export_mesh
 from .versions import run
 
-if sys.argv[1:] == ["repl"]:
-    from .engine import repl
-    repl()
+if sys.argv[1:2] == ["repl"]:
+    from .session import repl
+    repl(allow_code="--allow-code" in sys.argv[2:])
     sys.exit()
 args = [a for a in sys.argv[1:] if a != "--keep"]
 if len(args) < 2:

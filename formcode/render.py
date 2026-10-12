@@ -50,7 +50,10 @@ def normals(f, p, e=1e-3):
 
 def render_view(args):
     path, name, res, center, half = args
-    mod = load(path)
+    return trace(load(path), name, res, center, half)
+
+
+def trace(mod, name, res, center, half):
     f = mod.sdf
     eps, step_k, max_steps = getattr(mod, "EPS", 1e-3), getattr(mod, "STEP", 0.9), getattr(mod, "MAX_STEPS", 160)
     fwd, up = (np.asarray(v, float) for v in VIEWS[name])
@@ -82,16 +85,20 @@ def render_view(args):
     return name, np.clip(img, 0, 255).reshape(res, res).astype(np.uint8)
 
 
-def render(path, out, res=320, center=None, half=None, labels=True):
-    """Grid of views. center/half default to the scene's FRAME. Landmarks are drawn when the scene defines LANDMARKS."""
-    mod = load(path)
+def render(path, out, res=320, center=None, half=None, labels=True, names=None, mod=None):
+    """Grid of views. center/half default to the scene's FRAME. Landmarks are drawn when the scene defines LANDMARKS.
+    names: the views (default the scene's VIEW_NAMES); one view is traced in-process. mod: the scene, already built."""
+    mod = mod or load(path)
     c, h = frame(mod)
     center = c if center is None else np.asarray(center, float)
     half = h if half is None else half
-    names = getattr(mod, "VIEW_NAMES", DEFAULT_VIEWS)
-    cols = 2 if len(names) <= 4 else 3
-    with ProcessPoolExecutor(len(names)) as ex:
-        tiles = dict(ex.map(render_view, [(path, n, res, center, half) for n in names]))
+    names = names or getattr(mod, "VIEW_NAMES", DEFAULT_VIEWS)
+    cols = 1 if len(names) == 1 else 2 if len(names) <= 4 else 3
+    if len(names) == 1:
+        tiles = dict([trace(mod, names[0], res, center, half)])
+    else:
+        with ProcessPoolExecutor(len(names)) as ex:
+            tiles = dict(ex.map(render_view, [(path, n, res, center, half) for n in names]))
     grid = Image.new("RGB", (cols * res, -(-len(names) // cols) * res), (255, 255, 255))
     draw = ImageDraw.Draw(grid)
     L = getattr(mod, "LANDMARKS", {}) if labels else {}
@@ -138,6 +145,12 @@ def _eval_slabs(args):
 
 def export_mesh(path, out, res=320):
     """Marching cubes over the scene's FRAME. Needs scikit-image and trimesh (pip install formcode[mesh])."""
+    mesh = make_mesh(path, res)
+    mesh.export(out)
+    return f"mesh {out}: v={len(mesh.vertices)} f={len(mesh.faces)} watertight={mesh.is_watertight} bodies={mesh.body_count}"
+
+
+def make_mesh(path, res=320):
     from skimage.measure import marching_cubes
     import trimesh
     c, h = frame(load(path))
@@ -150,5 +163,4 @@ def export_mesh(path, out, res=320):
     mesh = trimesh.Trimesh(verts + lo, faces)
     if mesh.volume < 0:
         mesh.invert()
-    mesh.export(out)
-    return f"mesh {out}: v={len(mesh.vertices)} f={len(mesh.faces)} watertight={mesh.is_watertight} bodies={mesh.body_count}"
+    return mesh

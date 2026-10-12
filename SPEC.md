@@ -86,8 +86,10 @@ Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.co
 ```
 python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   render grid + report + version (formcode.versions.run)
 python -m formcode scene.py out.glb [res]                      marching-cubes mesh over FRAME (needs formcode[mesh]); no version
-python -m formcode repl                                         engine commands (PROTOCOL.md) from stdin; one batch per line, a trailing \ continues it
+python -m formcode repl [--allow-code]                          engine session (PROTOCOL.md) from stdin; one batch per line, a trailing \ continues it
 ```
+**Code execution is opt-in in the engine.** `code()` nodes and opening a `.py` scene run Python, so the REPL (and the MCP server, step E) refuse them unless started with `--allow-code`. The file CLI above is unchanged: the user runs that file on purpose.
+**Engine versions** (`formcode/session.py` + `versions.History`, PROTOCOL §6/§7): every batch that changes the scene is rebuilt, measured, diffed and saved as `vNNN` (or reverted as `vNNN-rejected`) by the same rules as below; in memory, and as `<dir>/runs/<stem>/vNNN.fc` + `vNNN.json` once the scene was opened from or saved to a path. The JSON is the run log below plus `parent`, `batch`, `changes`, `why`; there `tokens` count the batch text.
 `scene` may also be a `.fc` command script (`formcode.engine`): `render.load` builds it, with an automatic FRAME.
 **Versions.** Every render run saves `<scene_dir>/runs/<stem>/vNNN.py` (source) and `vNNN.json` (the run log: version, status baseline|accepted|kept|rejected, time, chars, tokens = chars//4, seconds, warning count, `metrics` = `measure()`). An unchanged scene makes no new version. After the report:
 ```
@@ -105,7 +107,7 @@ The render shows the rejected version. `--keep` accepts a regression (status `ke
 
 ## 8. Repo layout
 ```
-formcode/     kernel.py render.py senses.py versions.py engine.py (PROTOCOL.md: nodes, parser, staged build, REPL) __main__.py
+formcode/     kernel.py render.py senses.py versions.py engine.py (PROTOCOL.md: nodes, parser, staged build) session.py (loop, history, queries, REPL) __main__.py
 examples/     dragon.py human.py face.py anime.py   (final scenes from experiments 01–04; runs/ is git-ignored)
 tests/        test_kernel.py, test_versions.py, test_examples.py + golden/ (report text + 64 px renders per example)
 experiments/  session-1 research: lab code, every iteration, findings (frozen; not imported by the package)

@@ -1,5 +1,6 @@
-"""The engine (PROTOCOL.md): a scene of named nodes, edited by commands in Python call syntax that are parsed with
-`ast` and never executed. Batches are atomic.
+"""The engine's language and scene (PROTOCOL.md): a scene of named nodes, edited by commands in Python call syntax that
+are parsed with `ast` and never executed. The exceptions, code() and opening a legacy .py scene, run Python and are
+opt-in (Scene/Engine(allow_code=True), `repl --allow-code`). The session loop (versions, revert, queries) is session.py.
 
 Build is staged and deterministic, like examples/face.py:
   1. shapes and code nodes in order -> base (op: union = smin with `blend`, cut, intersect, separate = hard min)
@@ -13,7 +14,6 @@ import copy
 import difflib
 import inspect
 import math
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +23,6 @@ from scipy.spatial import cKDTree
 
 from . import kernel as K
 from .render import normals
-from .senses import measure
 
 BLEND = 0.01  # default blend radius (m) for union / cut / intersect
 FAR = 10.0    # on(): rays start this far out (m)
@@ -133,7 +132,8 @@ def _args(c, helpers):
 
 
 def parse(line):
-    """One command line -> (command, args, kwargs). Literals and on()/rel() only; nothing is executed."""
+    """One command line -> (command, args, kwargs). Literals and on()/rel() only; parsing executes nothing
+    (code() and .py scenes run Python later, at build, and only when allow_code is on)."""
     try:
         c = ast.parse(line, mode="eval").body
     except SyntaxError as e:
@@ -225,6 +225,11 @@ def _on(v, ctx):
     return hit + p["depth"] * normals(f, hit[None], 1e-4)[0] if p["depth"] else hit
 
 
+def _delta(a, b):
+    """The region where b differs from a (added or removed material): an eye's own extent."""
+    return lambda p: np.minimum(np.maximum(b(p), -a(p)), np.maximum(a(p), -b(p)))
+
+
 def _ren(v, a, b):
     if isinstance(v, str):
         return b if v == a else v
@@ -246,19 +251,39 @@ def _absolute(v):
 
 # ---------- the scene ----------
 
-class Scene:
-    """Ordered named nodes: name -> (kind, params). Commands are the c_* methods; each returns a short `ok ...`."""
+def _call(obj, cmd, args, kw):
+    if not hasattr(obj, "c_" + cmd):
+        raise FcError(f"{cmd}() works in a session, not in a script", "scripts hold build and edit commands")
+    fn = getattr(obj, "c_" + cmd)
+    try:
+        b = inspect.signature(fn).bind(*args, **kw)
+    except TypeError as e:
+        raise FcError(str(e), f"usage: {cmd}{inspect.signature(fn)}")
+    return fn(*b.args, **b.kwargs)
 
-    def __init__(self, name="untitled"):
-        self.name, self.nodes, self.writes = name, {}, []
+
+NO_CODE = FcError("code execution is off", "start the engine with --allow-code to enable code() and .py scenes")
+
+
+class Scene:
+    """Ordered named nodes: name -> (kind, params). Commands are the c_* methods; each returns a short `ok ...`.
+    path: where the scene was opened from or saved to (its versions go to <dir>/runs/<stem>/)."""
+
+    def __init__(self, name="untitled", allow_code=False):
+        self.name, self.nodes, self.writes, self.path, self.allow_code = name, {}, [], None, allow_code
 
     def call(self, cmd, args, kw):
-        fn = getattr(self, "c_" + cmd)
-        try:
-            b = inspect.signature(fn).bind(*args, **kw)
-        except TypeError as e:
-            raise FcError(str(e), f"usage: {cmd}{inspect.signature(fn)}")
-        return fn(*b.args, **b.kwargs)
+        return _call(self, cmd, args, kw)
+
+    def replay(self, text, where):
+        """Apply a command script (a .fc file or a saved version) line by line."""
+        for i, line in enumerate(text.splitlines(), 1):
+            s = line.strip()
+            if s and not s.startswith("#"):
+                try:
+                    self.call(*parse(s))
+                except FcError as e:
+                    raise FcError(f"{where} line {i}: {e.cause}", e.hint)
 
     def _get(self, name):
         if name not in self.nodes:
@@ -294,7 +319,7 @@ class Scene:
 
     # --- session ---
     def c_new(self, name):
-        self.name, self.nodes = name, {}
+        self.name, self.nodes, self.path = name, {}, None
         return f"ok new {name}"
 
     def c_open(self, path):
@@ -306,19 +331,18 @@ class Scene:
         text = p.read_text(encoding="utf-8")
         self.name, self.nodes = p.stem, {}
         if p.suffix == ".py":  # a legacy scene becomes one code node (its LANDMARKS, PROFILE, ... come along)
+            if not self.allow_code:
+                raise NO_CODE
             self.nodes[p.stem] = ("code", {"src": text})
+            self.path = path
             return f"ok opened {p.stem} (1 node: {p.stem}, code)"
-        for i, line in enumerate(text.splitlines(), 1):
-            s = line.strip()
-            if s and not s.startswith("#"):
-                try:
-                    self.call(*parse(s))
-                except FcError as e:
-                    raise FcError(f"{p.name} line {i}: {e.cause}", e.hint)
+        self.replay(text, p.name)
+        self.path = path
         return f"ok opened {self.name} ({len(self.nodes)} nodes)"
 
     def c_save(self, path):
         self.writes.append((path, self.fc()))  # written when the batch commits
+        self.path = path
         return f"ok saved {path}"
 
     # --- build ---
@@ -343,6 +367,8 @@ class Scene:
         return f"ok stroke {name} ({brush})"
 
     def c_code(self, name, src, **params):
+        if not self.allow_code:
+            raise NO_CODE
         self._new(name, "code", dict(src=src, **params))
         return f"ok code {name}"
 
@@ -440,7 +466,7 @@ class Scene:
 
     def _code(self, P, ctx):
         ns = {"__name__": "fc_code"}
-        exec(compile(P["src"], "<code>", "exec"), ns)  # the escape hatch (PROTOCOL §5): runs locally, like a .py scene
+        exec(compile(P["src"], "<code>", "exec"), ns)  # the escape hatch (PROTOCOL §5, opt-in): runs locally, like a .py scene
         if not callable(ns.get("sdf")):
             raise FcError("code defines no sdf(p)", "define def sdf(p): returning (N,) distances")
         ctx["L"].update(ns.get("LANDMARKS", {}))
@@ -451,6 +477,7 @@ class Scene:
         """The staged build (module doc). Returns a scene-module-like model for senses/render, or None if empty."""
         K.reset()
         ctx = dict(body=None, mb=None, solo={}, L={}, curves={}, meta={})
+        nodes = {}  # name -> (kind, own sdf, mirrored): what measure(name) / look(at=name) size up
         items = list(self.nodes.items())
         base = None
         for name, (kind, P) in items:  # 1. shapes + code -> base
@@ -460,6 +487,7 @@ class Scene:
                     f = self._code(P, ctx) if kind == "code" else self._shape(kind, P, ctx)
                     f(np.zeros((1, 3)))  # bad params fail here, under this node's name
                     ctx["solo"][name] = f
+                    nodes[name] = (kind, f, bool(P.get("mirror")))
                     base = f if base is None else _combine(base, f, P.get("op", "union"), P.get("blend", BLEND))
         if base is None:
             return None
@@ -501,8 +529,9 @@ class Scene:
         for name, (kind, P) in items:  # 4. eye / ear
             if kind in ("eye", "ear"):
                 with _tag(name):
-                    f = (K.eye if kind == "eye" else K.ear)(f, **P)
+                    before, f = f, (K.eye if kind == "eye" else K.ear)(f, **P)
                     f(np.zeros((1, 3)))
+                    nodes[name] = (kind, K.ATTACHED[-1][1] if kind == "ear" else _delta(before, f), True)
         with _tag("frame"):
             lo, hi = _bbox(f)  # auto-frame: the measured/rendered cube always holds the whole model
         prof = self.nodes.get("profile", ("", {}))
@@ -511,12 +540,10 @@ class Scene:
         m.update(sdf=f, LANDMARKS=L, PROFILE=prof or m.get("PROFILE", []),
                  PARTS={**m.get("PARTS", {}), **{n: g for n, g in ctx["solo"].items()
                                                  if self.nodes[n][0] in SHAPES and self.nodes[n][1].get("op", "union") in ("union", "separate")}},
-                 FIT_CORRECTIONS={**m.get("FIT_CORRECTIONS", {}), **corr},
+                 FIT_CORRECTIONS={**m.get("FIT_CORRECTIONS", {}), **corr}, NODES=nodes,
+                 CURVES={n: K.spline(P, _step(P)) for n, P in ctx["curves"].items()},
                  FRAME=(*map(float, (lo + hi) / 2), float(0.55 * (hi - lo).max())))
         return SimpleNamespace(**m)
-
-
-COMMANDS = {n[2:]: n for n in dir(Scene) if n.startswith("c_")}
 
 
 def _snap():
@@ -536,66 +563,11 @@ def _err(i, line, e):
             + (f" ({e.hint})" if e.hint else "") + ". Nothing applied.")
 
 
-class Engine:
-    """do(commands) applies a batch atomically (parse + apply to a copy; any error -> nothing applied), rebuilds when
-    the scene changed, and replies: the `ok` results joined by " | ", then the warnings."""
-
-    def __init__(self):
-        self.scene, self.model, self.metrics = Scene(), None, None
-
-    def do(self, commands):
-        work, out, touched, last = copy.deepcopy(self.scene), [], {}, 0
-        lines = commands.splitlines()
-        for i, line in enumerate(lines, 1):
-            s = line.strip()
-            if not s or s.startswith("#"):
-                continue
-            last = i
-            try:
-                cmd, args, kw = parse(s)
-                out.append(work.call(cmd, args, kw))
-            except FcError as e:
-                return _err(i, s, e)
-            except Exception as e:
-                return _err(i, s, FcError(f"{type(e).__name__}: {e}"))
-            for a in args[:2] if cmd == "rename" else args[:1]:
-                if isinstance(a, str):
-                    touched[a] = i
-        changed, model = work.fc() != self.scene.fc(), self.model
-        if changed:
-            snap = _snap()
-            try:
-                model = work.build()
-            except FcError as e:
-                _restore(snap)  # the kernel registries belong to the model still in use
-                i = touched.get(e.node, last)
-                return _err(i, lines[i - 1].strip(), e)
-        for path, text in work.writes:
-            Path(path).write_text(text, encoding="utf-8", newline="\n")
-        work.writes = []
-        self.scene, self.model = work, model
-        reply = " | ".join(out)
-        if changed and model is not None:
-            self.metrics = measure(model)
-            reply += "\n" + ("\n".join(t for _, t in self.metrics["warnings"]) or "warnings: none")
-        return reply
+COMMANDS = {n[2:]: n for n in dir(Scene) if n.startswith("c_")}  # session.py adds the engine commands
 
 
 def load(path):
     """A .fc script -> its built model (render.load uses this for .fc paths)."""
-    s = Scene()
+    s = Scene(allow_code=True)  # a file the user runs on purpose (the CLI; the render workers of look/export)
     s.c_open(str(path))
     return s.build()
-
-
-def repl(lines=None, out=None):
-    """One batch per line; a line ending in \\ continues the batch on the next line."""
-    eng, buf = Engine(), []
-    for line in lines or sys.stdin:
-        line = line.rstrip("\r\n")
-        if line.endswith("\\"):
-            buf.append(line[:-1])
-            continue
-        text, buf = "\n".join(buf + [line]), []
-        if text.strip():
-            print(eng.do(text), file=out or sys.stdout, flush=True)

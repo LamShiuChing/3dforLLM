@@ -89,6 +89,21 @@ The example itself is unchanged: it is the frozen exp04 result.
 - `rename` updates references in `at/a/b/through/along`; `delete` of a referenced node fails the batch at build.
 - every changed batch rebuilds everything and runs the full `measure()` (face ~10 s): step D's job.
 
+**Engine step B done** (`formcode/session.py`: `Engine`, the loop, history + query commands, REPL; `versions.History`;
+`tests/test_engine_loop.py`). After every changed batch: build, `measure()`, `versions.verdict` (the step-2 diff and
+regression rule, shared with the file CLI) vs the last accepted version, then save `vNNN` or revert and keep `vNNN-rejected`.
+Versions live in memory and, once the scene has a path (`open`/`save`), in `<dir>/runs/<stem>/vNNN.fc` + `.json`.
+`undo/goto/keep/history`, `report/measure/look/export` work; replies follow PROTOCOL §7 in ASCII (cp950), capped at 600 chars.
+Code execution is opt-in: `Engine(allow_code=True)` / `repl --allow-code`, else `code()`, `.py` open and `.fc` files with code fail.
+Found while timing the face (12 s per batch):
+- **false regressions from the kink sense:** `set("bump", size=0.006)` on a 4 mm bump at the cheek was reverted for
+  `+WARN kinks midline near gnathion` (a 3-sample cluster far from the edit). The 3000 kink samples are re-drawn from the
+  whole shell, so any edit reshuffles them and small clusters come and go. Step C/D should make the kink regression
+  local (only clusters near the changed region) or need a minimum cluster size.
+- **the auto-frame face export is not watertight** (res 320, half 0.173: 2 non-manifold edges at x=±29, y=-50, z=-55 mm,
+  behind the jaw), while the CLI with the hand-set FRAME 0.18 is watertight. A pinch the coarser-aligned grid hits.
+- undo/goto make a new version (status accepted, never checked) and walk `parent` links, so repeated undo keeps going back.
+
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
 - B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.

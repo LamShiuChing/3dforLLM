@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 import formcode.kernel as K
-from formcode.engine import Engine, parse, FcError, repl
+from formcode.engine import parse, FcError
+from formcode.session import Engine, repl
 from formcode.render import frame, render_view
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,15 +105,17 @@ def test_repl(capsys):
     assert out[0] == "ok add head (ellipsoid) | ok mark m" and out[2] == "untitled: 2 nodes"
 
 
-def test_open_legacy_face():
-    e = Engine()
-    out = e.do(f'open("{(ROOT / "examples" / "face.py").as_posix()}")')
-    assert out == "ok opened face (1 node: face, code)\nwarnings: none"
+def test_open_legacy_face(tmp_path):
+    face = tmp_path / "face.py"  # a copy: the engine saves versions next to the scene (runs/face/)
+    face.write_bytes((ROOT / "examples" / "face.py").read_bytes())
+    e = Engine(allow_code=True)
+    out = e.do(f'open("{face.as_posix()}")').splitlines()
+    assert out == ["ok opened face (1 node: face, code)", out[1]] and out[1].startswith("warnings: none | v001 | ")
+    assert (tmp_path / "runs" / "face" / "v001.fc").is_file()
     assert e.do("tree()") == "face: 1 node\n  face code"
     assert "pronasale" in e.model.LANDMARKS and e.model.PROFILE[0] == "trichion"
 
 
 def test_non_finite_numbers_rejected():
-    from formcode.engine import Engine
     r = Engine().do('add("x", "sphere", at=(0, 0, 0), size=1e999)')
     assert "not a finite number" in r and "Nothing applied" in r
