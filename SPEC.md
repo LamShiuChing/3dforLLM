@@ -1,210 +1,104 @@
-# formcode — Project Spec (v0)
+# formcode — Spec (v1, 2026-10-12)
 
-> Working name. A 3D modeling engine built **only for LLMs**: no UI, a terse text language, cheap text feedback, Blender as a headless backend.
-
----
+Replaces the Blender-first v0 spec (still in git history at `b81d074`). Rationale and evidence: `experiments/SUMMARY.md`; roadmap discussion: `PLAN.md`.
 
 ## 1. Goal
+An open-source, lightweight protocol and engine that lets **frozen** LLMs (no training) create detailed, polished 3D models **from nothing**.
+- The LLM is the creator. **No 3D-generative models and no shape templates or libraries** do the modeling. Image models may only supply *inputs*, such as a reference sheet.
+- General: characters, creatures, props, vehicles and environments, including sculpting. A detailed character is the hardest showcase.
+- Lightweight: pure Python + numpy core (scipy and pillow too). GPU optional. License Apache-2.0.
+- Token-efficient and fast.
 
-Let an LLM build good 3D assets (characters, props, environments, materials) by working in representations it handles well: **names, proportions, graphs, 2D sections, and short code**. The engine does all of the actual 3D work.
-
-**First showcase target:** a clean, quad-remeshed, rigged anime-style humanoid (adult proportions), exported to GLB/VRM, built entirely by an LLM through the tool.
-
-### Non-goals (for now)
-- Any human-facing UI or viewport
-- Forking or modifying Blender source
-- Real-time performance or a game engine
-- Raw vertex editing by the LLM
-
----
-
-## 2. Design principles
-
-1. **The LLM never touches vertices.** It writes intent (primitives, skeletons, sections, proportions, named regions). The engine produces geometry.
-2. **The dimension ladder.** The LLM works at 0D (names and numbers), 1D (skeletons and curves), and 2D (cross-sections and silhouettes). Only the engine works in 3D.
-3. **Token-efficient I/O.** Terse DSL in, compact diffs out. A typical tool response should be ≤150 tokens, and a full scene summary should be ≤500 tokens.
-4. **Text feedback first, images last.** Measurements, health checks, and silhouette-vs-reference scores come back as text. Small renders are optional and on demand.
-5. **Deterministic and undoable.** Seeded randomness, named checkpoints, and `undo N`. The same script always produces the same result.
-6. **Our engine owns the state; Blender is a replaceable backend.** Blender runs in a separate worker process.
-7. **Grow the language from observed LLM failures**, not from guesses.
-
----
+## 2. Principles (each one came from an experiment)
+1. **Borrow a language, don't invent one.** The interface is a small **Python vocabulary**. A terse DSL comes only if token measurements show Python is too expensive.
+2. **The vocabulary is the bottleneck, not LLM knowledge.** Use names, landmarks, curves and strokes. Raw coordinates are the exception, and raw vertex lists are never exposed.
+3. **Relative placement by default** (snap, attach, depth from skin). The LLM knows *where* better than *how big*, so scale gets linted.
+4. **Text senses first, and every sense runs every time.** Images are only for an overall impression and come on demand with full coverage (including the back).
+5. **Determinism.** All randomness is seeded. Examples have golden tests.
 
 ## 3. Architecture
-
 ```
-LLM (Claude Code, etc.)
-  │  DSL text
-  ▼
-MCP server  ─ tools: run, inspect, measure, check, view, compare, undo, checkpoint, export
-  │
-  ▼
-formcode engine (Python, pure — no bpy import)
-  ├─ dsl/       parser → AST → op list (with line numbers for errors)
-  ├─ scene/     scene state, op history, checkpoints, diffs
-  ├─ sdf/       SDF primitives, smooth booleans, evaluation grid, meshing
-  ├─ skel/      skeleton, proportions (head units), sections, lofting   [M6]
-  ├─ mesh/      trimesh/manifold ops, health checks, measurements
-  ├─ feedback/  measurements, silhouettes, reference comparison
-  └─ backend/   client for the Blender worker (JSON-RPC over stdio)
-  │
-  ▼
-Blender worker (separate process: `blender -b --python worker.py` or the `bpy` wheel)
-  └─ quad remesh (QuadriFlow), modifiers, rigging, materials, render, GLB/VRM export
+scene.py (LLM-written Python)  ──>  formcode.kernel   vocabulary: SDF ops, curves, fit, sculpt, anatomy parts
+          `from formcode import *`  formcode.render   load scene, sphere-traced view grid, marching-cubes export
+          defines sdf(p)            formcode.senses   one text report: geometry + attachment + lint + fit
+                                    python -m formcode  CLI
+later/  Blender worker for production steps (topology/UV/rig), P6. Behind a process boundary; only it imports bpy.
 ```
+A model is a signed distance function `sdf(p)`: `p` is an (N,3) array in meters, it returns (N,) distances, and negative means inside.
+Axes: y up, +z = the subject's front (toward the default camera), x = the subject's left. Names ending in `_L` mirror to `_R`.
 
-**Why a separate worker process:** it isolates crashes and Blender's Python-version constraints, keeps Blender's GPL code at a process boundary, and lets the core engine run and be tested without Blender installed.
+## 4. Scene contract
+A scene is a Python file. It must define `sdf`. It may define:
 
----
+| name | meaning |
+|---|---|
+| `FRAME = (cx, cy, cz, half)` | cube that is rendered, exported and measured. Default `(0, 0, 0, 1)`. Must contain the whole model, or the report says `clipped_at_bound=True` and the mesh is open. |
+| `PARTS = {name: sdf}` | per-part bounding boxes; floating pieces are attributed to a part |
+| `LANDMARKS = {name: (x,y,z)}` | drawn on renders; drift from the surface is reported |
+| `PROFILE = [landmark names]` | midline curve; max deviation per segment is reported |
+| `FIT_CORRECTIONS = {name: m}` | how far the blockout was from each landmark before `fit()` |
+| `VIEW_NAMES` | subset of `front, side (from +x), 3/4, top, back, side (from -x), bottom` |
+| `EPS, STEP, MAX_STEPS, AO` | sphere-tracer knobs for small or detailed models |
 
-## 4. Repo layout
+A scene may edit `TYPICAL` (the scale-lint table). The edit is reset before the next scene loads.
 
+## 5. Vocabulary (`formcode.kernel`)
+- **Primitives:** `sphere(p,c,r)`, `ellipsoid(p,c,r)`, `box(p,c,half,round)`, `capsule(p,a,b,ra,rb)` (round cone), `torus(p,c,R,r)`, `polygon2d(q,V)`.
+- **Combining:** `smin/smax(a,b,k)` (smooth union/intersection), `cut(a,b,k)`, `mirror_x(p)`, `rot(p,axis,deg,center)`.
+- **Detail:** `noise3(p,freq,seed)`, `voronoi(p,cell,seed)` → (F1,F2), `near_surface(d,p,fn,band)`.
+- **Curves and surface queries:** `spline(pts,step)` (Catmull-Rom), `dist_to_curve`, `on_surface(f,pts)` (snap), `cast(f,origin,dir)` (ray hit), `with_mirrors(L)`.
+- **Fitting:** `fit(base, targets, radius)` → `(sdf, corrections)`: the surface is bent to pass exactly through every landmark or curve sample.
+- **Sculpt strokes:** `sculpt(f, ops)`. Each op is `(name, kind, points, amount, width, sym)`, with kind in `crease | ridge | inflate | carve | groove`. Curves are snapped to the surface and the op is linted against `TYPICAL[name]`.
+- **Silhouette:** `front_outline(f, [(y, halfwidth), ...], k)` trims to a front-view outline.
+- **Anatomy parts** (placed relative to the skin; P3 moves them to a vocabulary pack):
+  - `eye(f, center=(x,y), r, en, ex, up, lo)`: the depth comes from the skin.
+  - `ear(f, tragion=(y,z), flare, size, splay)`: x is snapped onto the head. The ear registers for the seating sense.
+
+## 6. Senses (`formcode.senses.report`)
+One text block, every check on every run:
 ```
-formcode/
-├─ CLAUDE.md                 # short instructions for coding sessions
-├─ SPEC.md                   # this file
-├─ pyproject.toml
-├─ formcode/
-│  ├─ dsl/        parser.py, ast.py, errors.py
-│  ├─ scene/      state.py, history.py, diff.py
-│  ├─ sdf/        primitives.py, ops.py, grid.py, mesher.py
-│  ├─ skel/       skeleton.py, proportions.py, sections.py, loft.py
-│  ├─ mesh/       ops.py, health.py, measure.py
-│  ├─ feedback/   silhouette.py, compare.py, report.py
-│  ├─ backend/    client.py, protocol.py
-│  └─ server/     mcp_server.py
-├─ blender_worker/
-│  └─ worker.py               # runs inside Blender; only file that imports bpy
-├─ examples/                  # .form scripts (snowman.form, humanoid.form, ...)
-├─ tests/
-│  ├─ test_dsl.py, test_scene.py, test_sdf.py, test_feedback.py
-│  └─ golden/                 # expected measurements / hashes per example
-└─ out/                       # generated GLB/PNG (gitignored)
+ALL: min=… max=… size=… vol=…            (+ one line per PART)
+FLOATING piece (<part>) at x,y,z vox=n   (pieces not connected to the main body)
+components=n
+symmetry_err(x)=…  clipped_at_bound=…
+seating <part>: n% of surface in contact  (<< flagged below 40%)
+scale lint: <name> <measure> n mm (typical a-b)
+fit: base was off by <landmark> ±n mm, …  (top 5)
+landmark drift (>0.5mm, +out/-in): …
+profile max dev: <a>-><b> ±n mm, …        (worst 4)
 ```
+Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.compare(a, b, out)` puts two images side by side.
 
----
-
-## 5. The DSL (v0)
-
-### Syntax
-- One op per line. `;` also separates ops. `#` starts a comment.
-- Form: `<cmd> [name] [positional...] key=value ...`
-- Vectors use commas with no spaces: `at=0,1.2,0`
-- Units are meters by default. Inside a skeleton or body context, the suffix `h` means **head units** (`1.35h`).
-- Names are `snake_case`. Side suffixes `_L` and `_R` are recognized by `mirror`.
-- Every op returns a compact result line, and errors cite the line number plus a fix hint.
-
-### v0 commands (milestones M1–M2)
-| Command | Example | Meaning |
-|---|---|---|
-| `sphere` | `sphere head r=.12 at=0,1.6,0` | SDF sphere |
-| `capsule` | `capsule arm_L a=.2,1.4,0 b=.5,1.1,0 r=.05 r2=.04` | Tapered capsule between two points |
-| `box` | `box base size=1,.1,1 at=0,0,0 round=.02` | Rounded box |
-| `blend` | `blend body = torso head k=.05` | Smooth union (`k` = blend radius) |
-| `cut` | `cut cup = outer inner k=.01` | Smooth subtraction |
-| `inter` | `inter lens = a b k=.01` | Smooth intersection |
-| `xform` | `xform head t=0,.05,0 r=0,15,0 s=1.1` | Move, rotate (degrees), scale |
-| `mirror` | `mirror arm_L axis=x` | Creates `arm_R` |
-| `mesh` | `mesh body res=128` | SDF → triangle mesh (marching cubes) |
-| `del` | `del arm_R` | Delete |
-| `cp` / `rollback` | `cp before_arms` / `rollback before_arms` | Named checkpoints |
-| `undo` | `undo 2` | Undo the last N ops |
-| `export` | `export body file=out/body.glb` | Export |
-
-### Later commands (M5+), sketched
+## 7. CLI
 ```
-remesh body quad target=8k             # Blender QuadriFlow
-style anime heads=7 build=slim sex=f age=adult
-skel default_humanoid
-prop shoulder=1.35h hip=1.45h waist=.95h leg_ratio=.52
-sec thigh_L 0:(.62,.66) .5:(.48,.50) 1:(.34,.36)   # station:(width,depth) in head units
-head template=anime_f eye=large jaw=narrow chin=.9
-blend joints k=.04
-mat skin toon ramp=2 shadow=#e8b4a8 rim=.3
-rig auto                                # weights from the skeleton/section ownership
+python -m formcode scene.py out.png [cx,cy,cz,half]   render grid + report (+ scene size in tokens)
+python -m formcode scene.py out.glb [res]             marching-cubes mesh over FRAME (needs formcode[mesh])
 ```
 
-### Response format (example)
+## 8. Repo layout
 ```
-> sphere head r=.12 at=0,1.6,0
-ok +head sdf bbox=.24x.24x.24
-> blend body = torso head k=.05
-ok +body sdf (torso,head consumed) bbox=.42x1.72x.31
-> mesh body res=128
-ok body mesh v=18.4k f=36.8k manifold=yes
+formcode/     kernel.py render.py senses.py __main__.py
+examples/     dragon.py human.py face.py anime.py   (final scenes from experiments 01–04)
+tests/        test_kernel.py, test_examples.py + golden/ (report text + 64 px renders per example)
+experiments/  session-1 research: lab code, every iteration, findings (frozen; not imported by the package)
+later/        Blender M0 scaffolding, parked for P6
 ```
 
----
-
-## 6. MCP tool surface
-
-| Tool | Input | Returns |
-|---|---|---|
-| `run` | DSL text (one or more lines) | One result line per op, plus errors |
-| `inspect` | optional name | Compact scene tree, or details for one object |
-| `measure` | name, optional region list | Dimensions, ratios in head units, volumes |
-| `check` | name | Mesh health: manifold, holes, self-intersections, poly count, symmetry error |
-| `view` | name, views=front,side,top,3q, res≤256, mode=sil\|shade | Small PNG(s). Use sparingly. |
-| `compare` | name, ref image path, view | Silhouette IoU + per-region over/under % as text |
-| `undo` / `checkpoint` / `rollback` | n or name | Result line |
-| `export` | name, path, format=glb\|obj\|vrm | Path + stats |
-
-Rule: every tool returns text first. Images only come from `view`.
-
----
-
-## 7. Feedback module
-
-- **measure:** bbox, height, part lengths, widths at named stations. Body context reports in head units (`height=7.02h shoulder=1.33h`).
-- **check:** manifold, open edges, self-intersections, degenerate faces, poly count, L/R symmetry error.
-- **silhouette:** orthographic silhouette rendered cheaply (numpy rasterization of the mesh, or Blender Workbench).
-- **compare:** align a reference silhouette (e.g. from a ComfyUI turnaround sheet) by bbox, compute IoU, and report the worst regions in text: `thigh_L +8% wide, waist -5%`.
-
----
-
-## 8. Tech stack
-
-- **Python 3.11+** for the engine. The Blender worker uses Blender's bundled Python. If using the `bpy` wheel instead, match its required Python version.
-- `numpy`, `scikit-image` (marching cubes), `trimesh`, `manifold3d`, `pillow`. Optionally `torch` for GPU SDF evaluation later.
-- `mcp` Python SDK (FastMCP) for the server.
-- `pytest` for tests.
-- Blender 4.x+ headless for remeshing, rigging, materials, and rendering.
-
----
-
-## 9. Milestones and acceptance criteria
-
+## 9. Milestones (each ends with an experiment and a measurement)
 | # | Milestone | Done when |
 |---|---|---|
-| **M0** | Environment | `pytest` runs. Blender worker starts headless, creates a cube, exports GLB, and returns JSON. |
-| **M1** | DSL + scene state | Parser handles all v0 syntax with line-numbered errors. Scene history, diffs, undo, and checkpoints work. Pure Python, fully unit-tested, no Blender. |
-| **M2** | SDF core | All v0 primitives and smooth booleans. `mesh` produces a watertight mesh. `examples/snowman.form` (≤10 lines) exports a valid GLB. Same script gives the same hash. |
-| **M3** | Feedback v1 | `measure`, `check`, and `view` (silhouette mode) work on the snowman. |
-| **M4** | MCP server | Claude Code can build the snowman purely through MCP tools. Log the token use per session. |
-| **M5** | Blender backend ops | `remesh quad` via QuadriFlow, smoothing, materials passthrough, GLB export through the worker. |
-| **M6** | Skeleton + sections | `style`/`skel`/`prop`/`sec`/`mirror` produce a lofted, blended, quad-remeshed humanoid from ≤40 lines. |
-| **M7** | Reference compare | `compare` against a front/side silhouette PNG gives per-region text feedback. The LLM can close a deliberate 10% proportion error in ≤3 iterations. |
-| **M8** | Materials | `mat` with principled and toon presets, compiled to Blender shader nodes. |
-| **M9** | Rigging + export | `rig auto` derives weights from skeleton ownership. GLB (and later VRM) loads in Godot and poses correctly. |
+| **P0 ✓** | Lab → `formcode` package (kernel, renderer, senses) with tests | the experiments reproduce from the package (all 20 views pixel-identical to the lab; golden tests) |
+| P1 | Relative placement everywhere, always-on warnings at the top, versions + diff report + auto-revert | the face rebuilt with zero absolute depths; auto-revert triggers on a seeded regression |
+| P2 | Full sculpt brush set (flatten, smooth, pinch, grab, clay, layer) with per-stroke reports and bounded slopes | a nose/ear redo with no jagged junctions |
+| P3 | Anatomy pack: body landmarks, muscles between joints, skin over them, scale lint in head units | full human with face and visible musculature, judged against exp02 |
+| P4 | Fabric: garment panels + seams → small cloth sim on the body | a shirt with physically plausible folds |
+| P5 | Generality: one hard-surface asset and one creature | same protocol, no new core concepts |
+| P6 | Production (topology/UV/rig via `later/` Blender worker) + MCP server + eval harness | an external LLM session builds an asset end to end; tokens logged |
 
-**Track token cost from M4 onward:** tokens per op, tokens per successful asset, and the iterations needed. These numbers decide what to add or simplify in the language.
+Eval metrics (from P1 on): defects found by a human vs. by the engine, iterations, tokens, regressions. Baseline: plain SDF with no senses.
 
----
-
-## 10. Conventions for implementing sessions
-
-- Only `blender_worker/worker.py` may import `bpy`. The engine must import and test without Blender.
-- Every new DSL command needs: a parser test, an example in `examples/`, a one-line result format, and an error message with a fix hint.
-- Keep responses terse. If a response exceeds ~150 tokens, summarize it and offer detail via `inspect`.
-- Determinism: seed every random op, and use golden tests (measurements and hashes) for examples.
-- Update this SPEC when the language changes.
-
----
-
-## 11. Open questions
-
-- Final name and file extension (`.form` for now).
-- SDF evaluation on CPU (numpy) vs GPU (torch on the RunPod 5090) — start on CPU and switch once grids hit 256³+.
-- Anime head: parametric SDF vs a deformed template mesh.
-- Hair system (guide curves → cards/tubes): design it after M6.
-- Licensing: Blender is GPL. Keep it behind the worker process boundary, and get proper advice before distributing anything commercially.
+## 10. Conventions
+- Every new vocabulary word ships with: a test, use in an example, its line in the report (if it has one), and an error message with a fix hint.
+- Every new sense runs by default. A sense that must be switched on will be forgotten.
+- Changing the vocabulary, scene contract, report format or CLI → update this file in the same change.
+- Windows: the system code page is cp950. Open files with `encoding="utf-8"`. Scripts run by `ProcessPoolExecutor` must be files, not stdin.

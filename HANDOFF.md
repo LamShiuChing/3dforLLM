@@ -1,4 +1,4 @@
-# HANDOFF — read this first (state as of 2026-10-12, end of session 1)
+# HANDOFF — read this first (state as of 2026-10-12, session 2: P0 done)
 
 ## What this project is
 **formcode**: an open-source, lightweight protocol + engine that lets *frozen* LLMs (Claude, GPT, …, no training)
@@ -15,13 +15,22 @@ The user's non-negotiables:
 Image models (ComfyUI) are acceptable only as an *input* (e.g. a reference sheet for testing), not as the creator.
 
 ## Where we are
-Session 1 was **research + experiments**. No engine code yet.
-- `experiments/SUMMARY.md` has the findings across 4 experiments. **Read this.**
-- `PLAN.md` has the draft engine plan, milestones P0–P6 and 4 open decisions.
-- `experiments/sdf_lab/FINDINGS.md` is the detailed per-iteration log.
-- `SPEC.md` / the original `CLAUDE.md` text are the **outdated Blender-first design**. `PLAN.md` supersedes them; a rewrite is pending.
-- `blender_worker/`, `formcode/backend/client.py`, `tests/test_worker.py` hold early M0 scaffolding. Planned to move to
-  `later/` for production steps (topology/UV/rig). Its pytest has not been run in the project venv.
+- **Session 1** was research and experiments: findings in `experiments/SUMMARY.md`, per-iteration log in `experiments/sdf_lab/FINDINGS.md`.
+- **Session 2** settled the 4 decisions and finished **P0**:
+  - Python vocabulary, not a DSL.
+  - `SPEC.md` and `CLAUDE.md` rewritten. `SPEC.md` is now the authority; `PLAN.md` is the rationale.
+  - Apache-2.0 (`LICENSE`), name `formcode`.
+  - Blender M0 scaffolding moved to `later/`.
+- The **`formcode` package** (`kernel.py`, `render.py`, `senses.py`, CLI) is the lab code ported verbatim, plus:
+  - a scene-level `FRAME` sets the render, export and report bounds;
+  - one merged report, with every sense on every run;
+  - registries reset per scene load;
+  - chunked mesh export (fixes an out-of-memory error).
+- `examples/` holds the final scenes of all 4 experiments.
+  - All 20 views rendered **pixel-identical** to the lab code.
+  - Face and anime now use a wider frame `(0,-0.03,0,0.18)`, so the neck is no longer clipped and both meshes are **watertight**.
+  - Golden tests cover each example's report text and 64 px renders. 13 tests pass, and a 2 mm ear change makes them fail.
+- `refcompare.py` (anime reference compare) is **not ported**. Its constants are tied to one reference sheet, and P1 should replace it with auto-extracted outlines (lesson 8).
 
 ### The experiments (all pure numpy SDF, written by the LLM)
 | exp | what | result |
@@ -45,21 +54,19 @@ Session 1 was **research + experiments**. No engine code yet.
 11. **LLM sculpting is barely explored.** Prior art: ViSculpt 2026 (GUI mouse actions). Our "stroke = one line of text
     on anatomical curves" approach appears new.
 
-## Open decisions (the user must confirm before P0). My proposed defaults:
-1. Python vocabulary (not a custom DSL).
-2. Rewrite `SPEC.md` + `CLAUDE.md` around `PLAN.md`.
-3. Apache-2.0 license; keep the name `formcode` for now.
-4. Move the Blender M0 files to `later/`.
-
-**Next session starts with:** confirm the decisions → rewrite the spec → **P0**: turn `experiments/sdf_lab` into a `formcode`
-core package (kernel + renderer + always-on senses) with tests that reproduce the experiments. The experiments then become benchmarks
-that track tokens, iterations and defects.
+## Next: P1 (SPEC §9)
+Make relative placement the default and put always-on warnings at the top of the report. Add versions/checkpoints, a diff report per change,
+and auto-revert when warnings or fit error get worse. **Done when** the face is rebuilt with zero absolute depths and auto-revert
+triggers on a seeded regression. Also start logging tokens and iterations per run; that is the eval baseline.
+Known rough edges to look at: bounding boxes print in cm (2 decimals in meters), which is coarse for a face; the dragon reports
+components=10, all fragments below 4 voxels, so they are silently skipped; the landmark labels clutter the side view.
 
 ## How to run things (Windows 11, Git Bash)
-- venv: `.venv` (Python 3.12, numpy, pillow, scipy, scikit-image, trimesh, pytest), created with `uv venv --python 3.12`.
-- Lab render: `cd experiments/sdf_lab && ../../.venv/Scripts/python.exe lab.py dragon.py out.png [cx,cy,cz,half]`.
-  An output path ending in `.glb` exports a mesh.
-- Face lab: `../../.venv/Scripts/python.exe facelab.py face.py out.png [cx,cy,cz,half]`. Prints the senses report.
+- venv: `.venv` (Python 3.12, numpy, pillow, scipy, scikit-image, trimesh, pytest), created with `uv venv --python 3.12`;
+  `uv pip install --python .venv/Scripts/python.exe -e .` installs the package.
+- Package (installed editable): `.venv/Scripts/python.exe -m formcode examples/face.py out.png [cx,cy,cz,half]`.
+  An output path ending in `.glb` exports a mesh over the scene's FRAME. Tests: `.venv/Scripts/python.exe -m pytest -q`.
+- Old lab (frozen): `cd experiments/sdf_lab && ../../.venv/Scripts/python.exe lab.py dragon.py out.png` / `facelab.py face.py out.png`.
 - Anime compare: `cd experiments/anime_ref && ../../.venv/Scripts/python.exe refcompare.py anime.py out.png`.
 - Viewer: `cd experiments/sdf_lab/runs && ../../../.venv/Scripts/python.exe -m http.server 18765 --bind 127.0.0.1`,
   then open `http://127.0.0.1:18765/viewer.html`. The user has **no default app for .glb**; port 8765 is blocked (Hyper-V range).

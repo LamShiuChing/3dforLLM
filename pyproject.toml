@@ -1,12 +1,21 @@
 [project]
 name = "formcode"
-version = "0.0.0"
-description = "Headless 3D modeling engine for LLMs"
+version = "0.1.0"
+description = "Let a frozen LLM build detailed 3D from nothing: a Python SDF vocabulary plus text senses"
+license = "Apache-2.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["numpy", "pillow", "scipy"]
 
 [project.optional-dependencies]
+mesh = ["scikit-image", "trimesh"]
 dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["formcode"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

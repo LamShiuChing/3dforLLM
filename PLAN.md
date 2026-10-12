@@ -1,4 +1,7 @@
-# Protocol / engine plan — DRAFT for discussion (2026-10-12)
+# Protocol / engine plan — rationale (2026-10-12)
+
+> **Decided in session 2:** Python vocabulary, Apache-2.0, name `formcode`, Blender files moved to `later/`.
+> The spec is now `SPEC.md`; milestones and status live there. This file keeps the reasoning.
 
 Based on `experiments/SUMMARY.md`. This supersedes the Blender-first plan in `SPEC.md`. That file will be rewritten once we agree.
 

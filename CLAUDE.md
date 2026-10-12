@@ -1,25 +1,28 @@
 # CLAUDE.md — formcode
 
-> **STATUS (2026-10-12): read `HANDOFF.md` first.** Session 1 was research. Its findings are in `experiments/SUMMARY.md`,
-> and the new engine plan is `PLAN.md`, which **supersedes** the Blender-first design below and in `SPEC.md`
-> (rewrite pending the user's decisions). The text below is the original brief, kept until that rewrite.
+formcode lets frozen LLMs build detailed 3D from nothing: a small Python SDF vocabulary in, compact text senses out.
+**Read `SPEC.md` first** (architecture, scene contract, vocabulary, milestones P0–P6). `HANDOFF.md` has the current state and next step.
 
-formcode is a headless 3D modeling engine designed for LLMs to use: a terse DSL in, compact text feedback out, Blender as a backend worker. **Read `SPEC.md` before doing anything** — it holds the architecture, DSL, tool surface and milestones.
+## Non-negotiables (from the user)
+- The LLM is the creator: no 3D-generative models, no shape templates or libraries. Image models only as *input* (reference sheets).
+- Open source (Apache-2.0), lightweight: core = numpy + scipy + pillow. GPU optional.
+- Borrow existing languages and idioms rather than invent syntax.
 
 ## How to work
-- Work milestone by milestone (SPEC §9). Don't start a milestone until the previous one meets its acceptance criteria.
-- Start at M0 unless told otherwise. Report which milestone you finished and what's next.
-- Write tests alongside code; run `pytest` before declaring a milestone done.
+- Work milestone by milestone (SPEC §9). Each one ends with an experiment and a measurement. Report which milestone you finished and what's next.
+- Show results: render, look at all views (including back/top), run every sense. The user catches visual defects; be blunt about what's still wrong.
+- Write tests alongside code; run `pytest -q` before declaring a milestone done.
 
 ## Hard rules
-- Only `blender_worker/worker.py` imports `bpy`. The `formcode/` package must import and pass tests without Blender installed.
+- The `formcode/` package never imports Blender (`bpy`). Blender lives behind a process boundary in `later/` (P6).
 - The LLM-facing interface never exposes raw vertex lists.
-- Every tool/op response is text, short (aim ≤150 tokens). Images only via `view`.
-- All randomness is seeded; examples have golden tests.
-- Every new DSL command ships with: parser test, example script, result-line format, error message with a fix hint.
-- If you change the language or tool surface, update `SPEC.md` in the same change.
+- Every sense runs on every report; a new sense is on by default.
+- All randomness is seeded; examples have golden tests. Regenerate goldens (`python tests/test_examples.py`) only for intended changes, and say so.
+- `experiments/` is the frozen session-1 record; don't edit it, port from it.
+- If you change the vocabulary, scene contract, report format or CLI, update `SPEC.md` in the same change.
 
-## Commands
-- Tests: `pytest -q`
-- Run an example (from M2): `python -m formcode run examples/snowman.form`
-- Blender worker (from M0): `blender -b --python blender_worker/worker.py`
+## Commands (Git Bash, venv in `.venv`, package installed editable)
+- Tests: `.venv/Scripts/python.exe -m pytest -q` (~35 s)
+- Render + report: `.venv/Scripts/python.exe -m formcode examples/face.py out.png [cx,cy,cz,half]`
+- Mesh: `.venv/Scripts/python.exe -m formcode examples/face.py out.glb [res]`
+- Windows: cp950 code page, so open files with `encoding="utf-8"` and set `PYTHONIOENCODING=utf-8` for unicode output.

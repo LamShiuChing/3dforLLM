@@ -1,0 +1,7 @@
+ALL: min=-0.07,-0.19,-0.10 max=+0.07,+0.12,+0.12 size=+0.15,+0.30,+0.22 vol=0.005
+components=1
+symmetry_err(x)=0.0000  clipped_at_bound=False
+seating ear: 58% of surface in contact
+fit: base was off by cervical -9.5mm, gonion_L -5.7mm, gonion_R -5.7mm, inion +4.0mm, frontotemporale_L +3.8mm
+landmark drift (>0.5mm, +out/-in): subnasale +0.5, stomion +0.9, labrale_inf -0.5, sublabiale +1.0, pogonion -1.0, supraorbitale_L -0.8, alare_L -0.8, cheilion_L +2.3
+profile max dev: stomion->labrale_inf -2.0mm, pogonion->gnathion -1.4mm, labrale_sup->stomion -1.2mm, labrale_inf->sublabiale +1.1mm
