@@ -41,6 +41,7 @@ Four short messages, and one image that the LLM asked for. Every check ran on ev
 - One command per line, written as a Python function call with literal arguments: numbers, strings, tuples, lists, `True`/`False`, and the placement helpers in §4.
 - The engine parses commands with Python's `ast` module and **never executes them**. That makes them safe and deterministic, and every error comes with a precise fix hint.
 - The one exception is code: `code()` nodes and opening a legacy `.py` scene run Python. That is **opt-in**: off by default, on only when the engine is started with `--allow-code` (`Engine(allow_code=True)`). With it off, `code(...)`, a `.fc` file containing a `code(...)` line and `open("x.py")` fail with `code execution is off (start the engine with --allow-code ...)` and nothing is applied. Reason: behind MCP, an LLM (or a prompt-injected one, or a downloaded `.fc` file) must not be able to run arbitrary code.
+- **File paths stay in a workspace.** The engine has a root (`Engine(root=...)`, `--root DIR`, default: the working directory at start). Every path of `open`, `save` and `export` is resolved against it (`..` and symlinks resolved first) and must stay inside it, else `path outside the workspace <root> (use a path inside it, e.g. "scenes/face.fc")` and nothing is applied. Extensions: `save` `.fc`; `export` `.glb` (+ its `.json` sidecar); `open` `.fc`, or `.py` with `--allow-code`. Versions and `look` images go next to the scene (`<dir>/runs/<stem>/`, or a temp dir before the scene has a path). Same reason: an LLM must not overwrite or read files outside the project.
 - Units are meters. Axes: y up, +z front, x = the subject's left. `mirror=True` makes the node exist on both sides (define it on the left, x>0).
 - Dotted names reach inside a node: `"ear.splay"` is the `splay` parameter of node `ear`.
 
@@ -71,9 +72,9 @@ Four short messages, and one image that the LLM asked for. Every check ran on ev
 | `set(name, **params)` | change parameters | `ok ear splay -35→-20` |
 | `move(name, at=)` · `rename(a, b)` · `delete(name)` | | `ok move eye → on(head, 0.031, -0.002)` |
 | **goals: the engine solves** | | |
-| `seat(name, contact=0.55)` | search depth, flare and splay until the part sits on its host | `ok seat ear: splay -35→-14°, contact 56%` |
-| `solve(param, measure, target)` | e.g. `solve("jaw.size", "width jaw", 0.104)`. The measure names are the ones printed by `measure()` | `ok solve jaw.size 0.050→0.052: width jaw 104mm` |
-| `fix(n)` | apply fix *n* suggested in the last reply | |
+| `seat(name, contact=None)` | search the node's seat knobs until it sits on the rest of the model. Contact = fraction of its surface within 1.5 mm of the model without it. Knobs, least visible first: ear `flare` (0..10 mm), then `splay` (-45..30°), each searched in widening windows around its current value so the chosen look changes as little as possible. Without `contact=` the target is "attached" (ear ≥ 0.45, clear of the 40% warning); with `contact=0.57` it is hit exactly (attached ears measure 55-60%). If the chosen angle can't stay attached, the reply shows how far it had to move; a shape placed with `on()`: its `depth`; any other shape: a move toward the nearest surface, target "just attached" (0.10). `eye` has no seating measure yet (error) | `ok seat ear: splay -35->-14, flare 4.0->3.1mm, contact 56%` |
+| `solve(param, measure, target)` | e.g. `solve("jaw.size", "width jaw", 0.104)` or `"jaw.size[0]"`: a bounded 1-D search on one number until the measure hits the target. Measures: `width`/`height`/`depth <node>` (bbox; meters in args, mm in replies), `seating <node>`, `"a->b"` (distance). Not reachable: error with the closest value | `ok solve jaw.size 0.05->0.052: width jaw 104.0mm` |
+| `fix(n)` | apply fix *n* of the last REVERTED batch: the rejected batch plus the fix, as one batch through the loop | `ok seat ear: ...` |
 | **ask: extra detail on demand** | | |
 | `measure(a, b)` · `measure(name)` | distance between two names (landmarks, or node centres) · a node's bounding box (the left one if mirrored) and an ear's seating; a mark's position and drift; a curve's length | `nasion->menton 121.0mm` |
 | `report()` | the full report (warnings + measurements) | (long) |
@@ -89,14 +90,15 @@ Four short messages, and one image that the LLM asked for. Every check ran on ev
 3. **Auto-frame.** The engine fits the frame to the model's bounding box, so the LLM never sets `FRAME` and clipping can't happen.
 4. **Diff** against the last accepted version.
 5. **Regression?** That means a new warning, or fit/drift worse by more than 0.5 mm. If so: revert, keep the change as `vNNN-rejected`, and test fixes.
-6. **Fix search.** For each new warning, try up to 3 candidate fixes on a copy. Report only the fixes that remove the warning without adding another, with their predicted result:
+   A new kink warning counts only if its cluster has ≥ 5 samples and lies in the region the batch changed (the changed nodes' boxes before and after, plus their blend + 5 mm; everywhere if a mark, curve or stroke changed). Kink samples are redrawn on every build, so small or far clusters flicker; they are still shown as warnings.
+6. **Fix search.** For each new warning, try candidate fixes **on top of the rejected batch** (so the LLM's intent is kept): at most 4 builds per reverted batch, at most 2 fixes shown. Report only the fixes that remove the warning without adding a regression, with their predicted result:
 
    | warning | candidate fixes |
    |---|---|
    | loose piece / low seating | `seat(name)`, larger `blend` |
-   | kinks on a trim | larger `k`, smoothed outline |
-   | mirror seam | larger blend across x=0 |
-   | scale lint | the typical value |
+   | kinks on a trim | larger `k`, smoothed outline (not yet: `front_outline` is not an engine node kind) |
+   | mirror seam | larger `blend` of a mirrored shape |
+   | scale lint | a stroke's `width` / an ear's `size` set to the middle of the typical range |
 7. **Save** the version (`.fc` script + metrics + run log: tokens, time, warnings).
 8. **Reply.**
 
@@ -106,8 +108,8 @@ ok <one short result per command, joined by " | ">
 <changes vs last version: ±WARN …, measurement a->b>  (omitted if nothing changed)
 warnings: none | v006 | 0.9s                           (or: N warnings | v006 | 0.9s, then up to 3 WARN lines, new ones first)
 ```
-A regression replaces this with `REVERTED v006: <why>`, the new WARN lines, `back at v005 | 0.9s` and `keep() to accept the change anyway`
-(step C adds `fix n:` lines and `fix(1) to apply`). A batch that changes nothing (only queries) makes no version and replies with the results only.
+A regression replaces this with `REVERTED v006: <why>`, the new WARN lines, `fix n: <command> -> <predicted result>` lines,
+`back at v005 | 0.9s` and `fix(1) to apply | keep() to accept the change anyway` (no fixes found: only `keep() ...`). A batch that changes nothing (only queries) makes no version and replies with the results only.
 Replies are capped at 600 characters (about 150 tokens): line 1 and the changes end in `... (+N more)`, warnings in `(+N more: report())`.
 `report()`, `history()` and `tree()` are listings and are not capped; they come after the version lines.
 Queries (`report measure look export`) see the batch's result, even when the batch is then reverted.
@@ -120,7 +122,7 @@ Every error names the line, the cause and a fix.
   - The tool description *is* the cheat sheet: §4 and §5 compressed to about 300 tokens. One tool costs fewer tokens per session than 20 tools.
   - Replies are text. `look` adds an image (MCP image content, base64 PNG). Errors set `isError: true`.
   - Built on the official Python SDK (`mcp` on PyPI, MIT), as an optional extra `formcode[mcp]`, so the core stays numpy, scipy and pillow.
-- **REPL:** `python -m formcode repl [--allow-code]` reads the same commands from stdin. Used for tests and for clients without MCP.
+- **REPL:** `python -m formcode repl [--allow-code] [--root DIR]` reads the same commands from stdin. Used for tests and for clients without MCP.
 - **Script:** `python -m formcode run face.fc` replays a script. The scene file *is* a command script (final state, one line per node).
 
 ## 9. Speed targets and how

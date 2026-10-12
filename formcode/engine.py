@@ -265,12 +265,26 @@ def _call(obj, cmd, args, kw):
 NO_CODE = FcError("code execution is off", "start the engine with --allow-code to enable code() and .py scenes")
 
 
+def inside(root, path, exts):
+    """path (relative to root) resolved, with one of exts; it must stay inside root (None = anywhere: the CLI)."""
+    p = Path(path)
+    if p.suffix not in exts:
+        raise FcError(f"can't use {p.suffix or 'a path without a suffix'} here", "use a " + " or ".join(exts) + " path")
+    if root is None:
+        return p
+    r = Path(root, p).resolve()  # resolve first: neither .. nor a symlink can lead out
+    if not r.is_relative_to(root):
+        raise FcError(f"path outside the workspace {Path(root).as_posix()}", 'use a path inside it, e.g. "scenes/face.fc"')
+    return r
+
+
 class Scene:
     """Ordered named nodes: name -> (kind, params). Commands are the c_* methods; each returns a short `ok ...`.
-    path: where the scene was opened from or saved to (its versions go to <dir>/runs/<stem>/)."""
+    path: where the scene was opened from or saved to (its versions go to <dir>/runs/<stem>/).
+    root: the workspace; open/save paths must stay inside it (None = anywhere, for files the user runs on purpose)."""
 
-    def __init__(self, name="untitled", allow_code=False):
-        self.name, self.nodes, self.writes, self.path, self.allow_code = name, {}, [], None, allow_code
+    def __init__(self, name="untitled", allow_code=False, root=None):
+        self.name, self.nodes, self.writes, self.path, self.allow_code, self.root = name, {}, [], None, allow_code, root
 
     def call(self, cmd, args, kw):
         return _call(self, cmd, args, kw)
@@ -323,11 +337,10 @@ class Scene:
         return f"ok new {name}"
 
     def c_open(self, path):
-        p = Path(path)
+        p = inside(self.root, path, (".fc", ".py"))
         if not p.is_file():
-            raise FcError(f"no file {path}", "paths are relative to the working directory")
-        if p.suffix not in (".fc", ".py"):
-            raise FcError(f"can't open {p.suffix} files", "open a .fc script or a .py scene")
+            raise FcError(f"no file {path}", "paths are relative to the workspace")
+        path = str(p)
         text = p.read_text(encoding="utf-8")
         self.name, self.nodes = p.stem, {}
         if p.suffix == ".py":  # a legacy scene becomes one code node (its LANDMARKS, PROFILE, ... come along)
@@ -341,8 +354,9 @@ class Scene:
         return f"ok opened {self.name} ({len(self.nodes)} nodes)"
 
     def c_save(self, path):
-        self.writes.append((path, self.fc()))  # written when the batch commits
-        self.path = path
+        p = str(inside(self.root, path, (".fc",)))
+        self.writes.append((p, self.fc()))  # written when the batch commits
+        self.path = p
         return f"ok saved {path}"
 
     # --- build ---
@@ -473,8 +487,9 @@ class Scene:
         ctx["meta"].update({k: ns[k] for k in META if k in ns})
         return ns["sdf"]
 
-    def build(self):
-        """The staged build (module doc). Returns a scene-module-like model for senses/render, or None if empty."""
+    def build(self, skip=None):
+        """The staged build (module doc). Returns a scene-module-like model for senses/render, or None if empty.
+        skip: a shape left out of the body (still placeable on): "the model without this node", for contact."""
         K.reset()
         ctx = dict(body=None, mb=None, solo={}, L={}, curves={}, meta={})
         nodes = {}  # name -> (kind, own sdf, mirrored): what measure(name) / look(at=name) size up
@@ -488,6 +503,8 @@ class Scene:
                     f(np.zeros((1, 3)))  # bad params fail here, under this node's name
                     ctx["solo"][name] = f
                     nodes[name] = (kind, f, bool(P.get("mirror")))
+                    if name == skip:
+                        continue
                     base = f if base is None else _combine(base, f, P.get("op", "union"), P.get("blend", BLEND))
         if base is None:
             return None

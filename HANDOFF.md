@@ -104,6 +104,24 @@ Found while timing the face (12 s per batch):
   behind the jaw), while the CLI with the hand-set FRAME 0.18 is watertight. A pinch the coarser-aligned grid hits.
 - undo/goto make a new version (status accepted, never checked) and walk `parent` links, so repeated undo keeps going back.
 
+**Engine step C done** (`formcode/goals.py`, `tests/test_engine_goals.py`): `seat(name, contact=None)`, `solve(param, measure, target)`,
+fix search + `fix(n)`, and a workspace root for file paths.
+- contact = `senses.seating` generalized (same fixed grid, evaluated only in a box around the part, so the ear's number
+  equals the sense's) of a node vs the model without it (`Scene.build(skip=name)`). Ear: coordinate passes over splay
+  then flare (`minimize_scalar` bounded, 2 rounds), trials call `kernel.ear` on the same host. Shapes: `on()` depth or a
+  move toward the nearest surface, `brentq` to contact 0.10. Replies report the contact of the loop's own build.
+- `solve`: `brentq` when the bounds bracket the target, else bounded `minimize_scalar`; each trial rebuilds a copy.
+  Default bounds x0/4..4x0 (or the seat-knob bounds). `_extent` (measure/look/solve) now refines each side to the surface (~um).
+- fix search: catalogue in `goals._candidates`, tried on the rejected batch, at most 4 builds, 2 shown; `fix(n)` replays the
+  checked scene. `front_outline` trims are not an engine kind, so no trim fix yet.
+- kink regressions: a new cluster counts only with >= 5 samples and inside the changed nodes' boxes (+ blend + 5 mm).
+  Fixed the step-B false revert (reproduced on a small scene: a 3-sample cluster at a far bud flickers with every nose edit).
+- `Engine(root=)` / `repl --root DIR`: open/save/export paths resolved and kept inside the workspace, extensions checked.
+- Timings: small head scene seat ear ~1 s on top of a 1.4 s batch, fix search ~3.6 s (2 candidates). Face copy (its ear
+  as an engine `ear` node): batch ~9 s, `seat("ear")` +2 s, fix search +10.5 s (one candidate = seat + full build + measure).
+- Open: seat's bounded search may land far from the start (face: splay -30 -> 20.3, flare kept at 10 mm); a "closest to
+  the current value" preference would read better. Fix candidates are full rebuilds (step D: region-only checks).
+
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
 - B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.

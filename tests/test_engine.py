@@ -79,7 +79,7 @@ def test_absolute_placements_are_counted():
 
 
 def test_save_open_round_trip(tmp_path):
-    e = Engine()
+    e = Engine(root=tmp_path)
     path = (tmp_path / "s.fc").as_posix()
     out = e.do(HEAD + '\nadd("nose", "sphere", at=on("body", x=0, y=-0.01), size=0.015, blend=0.01)\n'
                'mark("ntip", on("nose", x=0, y=-0.01))\n'
@@ -88,7 +88,7 @@ def test_save_open_round_trip(tmp_path):
                f'rename("nose", "snout")\nsave("{path}")')
     assert "ok rename nose -> snout" in out and "warnings" in out
     assert e.scene.nodes["ntip"][1]["at"].p["host"] == "snout"  # rename follows references
-    e2 = Engine()
+    e2 = Engine(root=tmp_path)
     assert e2.do(f'open("{path}")').startswith("ok opened untitled (5 nodes)")
     assert np.allclose(e.model.sdf(P), e2.model.sdf(P)) and e.do("tree()") == e2.do("tree()")
     assert "tip_R" in e2.model.LANDMARKS
@@ -108,7 +108,7 @@ def test_repl(capsys):
 def test_open_legacy_face(tmp_path):
     face = tmp_path / "face.py"  # a copy: the engine saves versions next to the scene (runs/face/)
     face.write_bytes((ROOT / "examples" / "face.py").read_bytes())
-    e = Engine(allow_code=True)
+    e = Engine(allow_code=True, root=tmp_path)
     out = e.do(f'open("{face.as_posix()}")').splitlines()
     assert out == ["ok opened face (1 node: face, code)", out[1]] and out[1].startswith("warnings: none | v001 | ")
     assert (tmp_path / "runs" / "face" / "v001.fc").is_file()

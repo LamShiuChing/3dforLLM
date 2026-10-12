@@ -86,9 +86,10 @@ Renders: a labeled grid of `VIEW_NAMES` with a camera-relative light. `render.co
 ```
 python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   render grid + report + version (formcode.versions.run)
 python -m formcode scene.py out.glb [res]                      marching-cubes mesh over FRAME (needs formcode[mesh]); no version
-python -m formcode repl [--allow-code]                          engine session (PROTOCOL.md) from stdin; one batch per line, a trailing \ continues it
+python -m formcode repl [--allow-code] [--root DIR]             engine session (PROTOCOL.md) from stdin; one batch per line, a trailing \ continues it
 ```
 **Code execution is opt-in in the engine.** `code()` nodes and opening a `.py` scene run Python, so the REPL (and the MCP server, step E) refuse them unless started with `--allow-code`. The file CLI above is unchanged: the user runs that file on purpose.
+**Engine file paths stay in a workspace** (`--root DIR`, default: the working directory; the MCP server gets the same flag). `open`/`save`/`export` paths are resolved (`..`, symlinks) and must stay inside it; `save` writes `.fc`, `export` `.glb` + `.json`, `open` reads `.fc` (`.py` only with `--allow-code`). Anything else fails with a hint and nothing is applied (PROTOCOL §3).
 **Engine versions** (`formcode/session.py` + `versions.History`, PROTOCOL §6/§7): every batch that changes the scene is rebuilt, measured, diffed and saved as `vNNN` (or reverted as `vNNN-rejected`) by the same rules as below; in memory, and as `<dir>/runs/<stem>/vNNN.fc` + `vNNN.json` once the scene was opened from or saved to a path. The JSON is the run log below plus `parent`, `batch`, `changes`, `why`; there `tokens` count the batch text.
 `scene` may also be a `.fc` command script (`formcode.engine`): `render.load` builds it, with an automatic FRAME.
 **Versions.** Every render run saves `<scene_dir>/runs/<stem>/vNNN.py` (source) and `vNNN.json` (the run log: version, status baseline|accepted|kept|rejected, time, chars, tokens = chars//4, seconds, warning count, `metrics` = `measure()`). An unchanged scene makes no new version. After the report:
@@ -98,7 +99,7 @@ vs v003: no measurable change
 run v004: ~T tokens, W warnings, S s
 ```
 Values are listed only when their printed form changes (0.1 mm, 1%). Landmark drift sum = Σ|drift| over non-`_R` landmarks.
-**Auto-revert.** A run is a regression vs the previous accepted version if it adds a warning key (kind + subject, e.g. `loose piece (moon)`, `seating ear`, `kinks midline near nasion`; counts in the text don't matter), or the worst |profile dev| or the landmark drift sum grows by more than 0.5 mm. Then it is saved as `vNNN-rejected`, the scene file is restored to the previous accepted source, and the output starts with
+**Auto-revert.** A run is a regression vs the previous accepted version if it adds a warning key (kind + subject, e.g. `loose piece (moon)`, `seating ear`, `kinks midline near nasion`; counts in the text don't matter, but a new kink cluster needs ≥ 5 samples, and in the engine it must also lie in the changed region), or the worst |profile dev| or the landmark drift sum grows by more than 0.5 mm. Then it is saved as `vNNN-rejected`, the scene file is restored to the previous accepted source, and the output starts with
 ```
 REGRESSED vs v003 -> scene reverted (kept as v004-rejected). Re-run with --keep to accept.
 why: +WARN loose piece (moon)

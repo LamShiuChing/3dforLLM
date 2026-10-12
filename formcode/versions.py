@@ -11,6 +11,19 @@ from .render import load, render
 from .senses import measure, text
 
 WORSE_MM = 0.5  # worst profile dev / landmark drift sum may grow this much before it counts as a regression
+KINK_MIN = 5    # a new kink cluster needs this many samples to count as a regression
+
+
+def _counts(key, m, region):
+    """Does a new warning count as a regression? Kink clusters only with >= KINK_MIN samples and inside the changed
+    region (boxes, None = anywhere): the kink samples are redrawn from the whole shell on every build, so small
+    clusters far from an edit come and go (they are still shown as warnings)."""
+    c = m.get("kink_clusters", {}).get(key)
+    if c is None:
+        return True
+    lo, hi = c[1:4], c[4:7]
+    return c[0] >= KINK_MIN and (region is None or any(
+        all(a <= q and b >= p for a, b, p, q in zip(lo, hi, blo, bhi)) for blo, bhi in region))
 
 
 def _numbers(m):
@@ -18,12 +31,13 @@ def _numbers(m):
             "landmark drift sum": sum(map(abs, m["drift"].values())) if m["drift"] else None}
 
 
-def diff(old, new):
+def diff(old, new, region=None):
     """(changes, regressions) between two measure() dicts. Warnings compare by key (kind + subject), not numbers;
-    a value counts as changed only when its printed form changes (0.1 mm, 1%)."""
+    a value counts as changed only when its printed form changes (0.1 mm, 1%). region: see _counts."""
     a, b = Counter(k for k, _ in old["warnings"]), Counter(k for k, _ in new["warnings"])
-    bad = [f"+WARN {k}" for k in b - a]
-    changes = bad + [f"-WARN {k}" for k in a - b]
+    changes = [f"+WARN {k}" for k in b - a]
+    bad = [x for x in changes if _counts(x[6:], new, region)]
+    changes += [f"-WARN {k}" for k in a - b]
     for (label, x), y in zip(_numbers(old).items(), _numbers(new).values()):
         if x is not None and y is not None and f"{x:.1f}" != f"{y:.1f}":
             changes.append(f"{label} {x:.1f}->{y:.1f}mm")
@@ -36,11 +50,11 @@ def diff(old, new):
     return changes, bad
 
 
-def verdict(old, new, keep=False):
+def verdict(old, new, keep=False, region=None):
     """(status, changes, regressions) of new metrics vs the last accepted ones (None = no version yet / empty scene)."""
     if old is None or new is None:
         return ("baseline" if old is None else "accepted"), [], []
-    changes, bad = diff(old, new)
+    changes, bad = diff(old, new, region)
     return ("accepted" if not bad else "kept" if keep else "rejected"), changes, bad
 
 

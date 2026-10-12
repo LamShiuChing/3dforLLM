@@ -13,8 +13,8 @@ MOON = 'add("moon", "sphere", at=(0.3, 0, 0), size=0.02)'  # far from the ball: 
 
 
 @pytest.fixture
-def e():
-    e = Engine()
+def e(tmp_path):
+    e = Engine(root=tmp_path)  # tests save, look and export under tmp_path
     e.do(BALL)
     return e
 
@@ -31,7 +31,7 @@ def test_accepted_batch_makes_a_version_and_queries_dont(e):
 def test_regression_is_reverted_then_kept(e):
     out = e.do(MOON).splitlines()
     assert out[0] == "REVERTED v002: +WARN loose piece (moon)" and out[1].startswith("WARN loose piece (moon)")
-    assert out[-1] == "keep() to accept the change anyway"
+    assert out[2].startswith('fix 1: seat("moon") -> ') and out[-1] == "fix(1) to apply | keep() to accept the change anyway"
     assert "moon" not in e.do("tree()") and e.h.v["v002-rejected"]["status"] == "rejected" and e.h.cur == "v001"
     out = e.do("keep()").splitlines()
     assert out[0] == "ok keep v002-rejected (was: +WARN loose piece (moon))" and out[1] == "+WARN loose piece (moon)"
@@ -62,7 +62,7 @@ def test_versions_persist_once_the_scene_has_a_path(e, tmp_path):
     assert log["status"] == "accepted" and log["tokens"] > 0 and log["warnings"] == 0 and "metrics" in log
     assert json.loads((runs / "v003-rejected.json").read_text(encoding="utf-8"))["status"] == "rejected"
     assert "nose" in (runs / "v002.fc").read_text(encoding="utf-8")
-    e2 = Engine()  # reopening continues the numbering: nothing is overwritten
+    e2 = Engine(root=tmp_path)  # reopening continues the numbering: nothing is overwritten
     assert e2.do(f'open("{(tmp_path / "s.fc").as_posix()}")').splitlines()[-1].startswith("warnings: none | v004")
 
 
@@ -99,14 +99,15 @@ def test_export_glb_and_sidecar(e, tmp_path):
 
 
 def test_code_is_opt_in(tmp_path):
-    face = (ROOT / "examples" / "face.py").as_posix()
+    face = tmp_path / "face.py"  # inside the workspace: open() fails for the code, not the path
+    face.write_bytes((ROOT / "examples" / "face.py").read_bytes())
     script = tmp_path / "c.fc"
     script.write_text('code("blob", "from formcode import *\\nsdf = lambda p: sphere(p, (0, 0, 0), 0.1)")\n', encoding="utf-8")
-    e = Engine()
-    for batch in ['code("x", "def sdf(p): return p[:, 0]")', f'open("{face}")', f'open("{script.as_posix()}")']:
+    e = Engine(root=tmp_path)
+    for batch in ['code("x", "def sdf(p): return p[:, 0]")', f'open("{face.as_posix()}")',f'open("{script.as_posix()}")']:
         out = e.do(batch)
         assert "code execution is off" in out and "--allow-code" in out and "Nothing applied" in out
     assert not e.scene.nodes and not e.h.v
-    out = Engine(allow_code=True).do(f'open("{script.as_posix()}")')
+    out = Engine(allow_code=True, root=tmp_path).do(f'open("{script.as_posix()}")')
     assert out.startswith("ok opened c (1 nodes)") and "v001" in out
     assert load(script).sdf(np.zeros((1, 3)))[0] < 0  # a file the user runs on purpose (CLI, render workers)

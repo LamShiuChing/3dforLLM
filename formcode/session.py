@@ -12,7 +12,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from .engine import COMMANDS, FcError, Scene, _bbox, _call, _did, _err, _eval, _restore, _snap, parse
+from . import goals
+from .engine import COMMANDS, FcError, Scene, _call, _did, _err, _restore, _snap, inside, parse
+from .goals import _extent, _point
 from .render import DEFAULT_VIEWS, compare, frame, render
 from .senses import measure, mm, text
 from .versions import History, verdict
@@ -59,39 +61,14 @@ def _need(x):
     return x
 
 
-def _extent(name, mod, n=64):
-    """(lo, hi) of a node's own shape (the left one if mirrored), to about a 64th of its size."""
-    if name not in mod.NODES:
-        raise FcError(f'no shape or landmark "{name}"', _did(name, [*mod.NODES, *mod.LANDMARKS], "name"))
-    kind, f, mirrored = mod.NODES[name]
-    g = (lambda p: np.maximum(f(p), -p[:, 0])) if mirrored else f
-    lo, hi = _bbox(g)
-    s = [np.linspace(lo[i], hi[i], n) for i in range(3)]
-    P = np.stack(np.meshgrid(*s, indexing="ij"), -1).reshape(-1, 3)
-    P = P[_eval(g, P) < 0]
-    return (P.min(0), P.max(0)) if len(P) else (lo, hi)
-
-
-def _point(name, mod):
-    if name in mod.LANDMARKS:
-        return np.asarray(mod.LANDMARKS[name], float)
-    lo, hi = _extent(name, mod)
-    return (lo + hi) / 2
-
-
-def fixes(scene, bad):
-    """Step C (PROTOCOL §6.6): candidate fixes for the regressions in `bad`, tried on a copy of `scene`, as
-    (command, predicted result). Not built yet: no fixes are offered."""
-    return []
-
-
 class Engine:
     """do(commands) applies a batch atomically (parse + apply to a copy; any error -> nothing applied). When the scene
     changed it rebuilds, measures, diffs against the last accepted version and saves a version, or reverts a
     regression (PROTOCOL §6); replies per §7. History and query commands are the c_* methods here."""
 
-    def __init__(self, allow_code=False):
-        self.scene, self.model, self.metrics = Scene(allow_code=allow_code), None, None
+    def __init__(self, allow_code=False, root=None):
+        self.root = Path(root or Path.cwd()).resolve()  # the workspace: open/save/export paths must stay inside it
+        self.scene, self.model, self.metrics = Scene(allow_code=allow_code, root=self.root), None, None
         self.h, self.b, self.tmp, self.looks = History(), None, None, 0
 
     def do(self, commands):
@@ -139,6 +116,8 @@ class Engine:
             same = b.base is not None and fc == b.base["fc"]  # undo / goto / keep: no regression check
             ref = cur if same or b.base is None else b.base
             status, changes, bad = verdict(ref and ref["metrics"], m)
+            if any(x.startswith("+WARN kinks") for x in bad):  # a new kink cluster counts only near the change
+                status, changes, bad = verdict(ref["metrics"], m, region=goals.changed_region(self.scene, self.model, work, model))
             if same:
                 status, bad = ("kept" if b.base["status"] == "rejected" else "accepted"), []
             parent = (b.base["parent"] if same else b.base["version"]) if b.base else h.cur
@@ -151,6 +130,7 @@ class Engine:
         if changed:
             ver = h.add(fc, commands, t0, m, status, parent, changes)
         for path, t in work.writes:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(t, encoding="utf-8", newline="\n")
         work.writes = []
         self.scene, self.model, self.metrics, self.h = work, model, m, h
@@ -164,10 +144,10 @@ class Engine:
 
     def _reverted(self, e, m, res, t0):
         bad = e["why"]
-        fx = fixes(self.b.work, bad)
+        fx = e["fixes"] = goals.fixes(self.b.work, m, bad)
         out = [_cut(f"REVERTED {e['version'].split('-')[0]}: " + " | ".join(bad), 200)]
         out += [_cut(t, 110) for k, t in m["warnings"] if f"+WARN {k}" in bad][:3]
-        out += [f"fix {j}: {c} -> {r}" for j, (c, r) in enumerate(fx, 1)]
+        out += [f"fix {j}: {c} -> {r}" for j, (c, r, *_) in enumerate(fx, 1)]
         out += [f"back at {self.h.cur} | {time.time() - t0:.1f}s",
                 ("fix(1) to apply | " if fx else "") + "keep() to accept the change anyway"]
         return "\n".join(out + [r for cmd, r in res if cmd in QUERIES])
@@ -204,6 +184,28 @@ class Engine:
             raise FcError(f"the scene changed since {e['version']}", f'goto("{e["version"]}") brings it back anyway')
         self._to(e)
         return f"ok keep {e['version']} (was: {' | '.join(e['why'])})"
+
+    def c_fix(self, n=1):
+        e = self.h.last_rejected()
+        fx = e and e.get("fixes")
+        if not fx:
+            raise FcError("no fixes to apply", "fixes are offered after a REVERTED batch; keep() accepts one as it is")
+        if type(n) is not int or not 1 <= n <= len(fx):
+            raise FcError(f"no fix {n!r}", "the last REVERTED batch offered fix(1)" + (f" to fix({len(fx)})" if len(fx) > 1 else ""))
+        if self.scene.fc() != self.h.get(e["parent"])["fc"]:
+            raise FcError(f"the scene changed since {e['version']}", f'goto("{e["version"]}") brings the rejected batch back')
+        w = self.b.work
+        path = w.path
+        w.replay(fx[n - 1][3], e["version"])  # the rejected batch + the fix, as checked by the fix search
+        w.path = path
+        return fx[n - 1][2]
+
+    # --- goals (PROTOCOL §5): the engine searches the numbers; the reply comes from the loop's build ---
+    def c_seat(self, name, contact=None):
+        return goals.seat(self.b.work, name, contact)
+
+    def c_solve(self, param, measure, target):
+        return goals.solve(self.b.work, param, measure, target)
 
     def c_history(self):
         return self.h.lines()
@@ -265,9 +267,7 @@ class Engine:
         return q
 
     def c_export(self, path, res=320):
-        p = Path(path)
-        if p.suffix != ".glb":
-            raise FcError(f"can't export {p.suffix or 'without a suffix'}", 'export("name.glb"): a mesh + a .json sidecar')
+        p = inside(self.root, path, (".glb",))  # + its .json sidecar
 
         def q(mod, m):
             _need(mod)
@@ -312,9 +312,9 @@ class Engine:
 COMMANDS.update({n[2:]: n for n in dir(Engine) if n.startswith("c_")})
 
 
-def repl(lines=None, out=None, allow_code=False):
+def repl(lines=None, out=None, allow_code=False, root=None):
     """One batch per line; a line ending in \\ continues the batch on the next line."""
-    eng, buf = Engine(allow_code), []
+    eng, buf = Engine(allow_code, root), []
     for line in lines or sys.stdin:
         line = line.rstrip("\r\n")
         if line.endswith("\\"):

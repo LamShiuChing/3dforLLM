@@ -12,11 +12,17 @@ def fmt(v):
     return ",".join(f"{x:+.2f}" for x in v)
 
 
-def seating(part, host, n=64):
-    """Fraction of the part's surface that touches the host (within 1.5 mm). Low = stuck on."""
-    s = np.linspace(-0.2, 0.2, n * 2)
-    g = np.stack(np.meshgrid(s, s, s, indexing="ij"), -1).reshape(-1, 3)
-    g = g[g[:, 0] > 0]  # left side is enough (mirrored)
+def seating(part, host, n=64, box=None, left=True):
+    """Fraction of the part's surface that touches the host (within 1.5 mm). Low = stuck on. Works for any part vs
+    any host (the engine passes a node and the model without it). The grid is fixed: 2n points across +-0.2 m,
+    continued past it. box=(lo, hi): only the grid points inside it (the same result if it holds the part's surface,
+    much faster). left: only x>0 (enough for a mirrored part)."""
+    h = 0.4 / (2 * n - 1)
+    lo, hi = (np.full(3, -0.2), np.full(3, 0.2)) if box is None else box
+    s = [-0.2 + h * np.arange(np.ceil((a + 0.2) / h - 1e-9), np.floor((b + 0.2) / h + 1e-9) + 1) for a, b in zip(lo, hi)]
+    g = np.stack(np.meshgrid(*s, indexing="ij"), -1).reshape(-1, 3)
+    if left:
+        g = g[g[:, 0] > 0]
     surf = g[np.abs(part(g)) < 0.002]
     return float((host(surf) < 0.0015).mean()) if len(surf) else 0.0
 
@@ -80,7 +86,8 @@ def kinks(f, g, d, h, n_samples=3000):
 
 
 def _kink_warnings(K, h, L, parts):
-    """Group kinks (folded to x>=0, so mirrored pairs merge) into clusters and describe where each one is."""
+    """Group kinks (folded to x>=0, so mirrored pairs merge) into clusters and describe where each one is:
+    (key, text, [samples, *lo, *hi]) with the unfolded box (for the regression rule, versions.diff)."""
     out = []
     if not len(K):
         return out
@@ -108,7 +115,8 @@ def _kink_warnings(K, h, L, parts):
         hint = "  (mirror seam: the shape is not smooth across x=0)" if side == "midline" else ""
         if any((np.abs(polygon2d(pts[:, :2], V)) < 2 * h).mean() > 0.5 for V in kernel.TRIMS):
             hint = "  (on the front_outline trim: its polygon corners crease the surface; smooth the outline or raise k)"
-        out.append((f"kinks {side}{near}", f"WARN kinks: {sel.sum()} creased samples, {side}{near}, box {mm(lo)}..{mm(hi)}mm{hint}"))
+        out.append((f"kinks {side}{near}", f"WARN kinks: {sel.sum()} creased samples, {side}{near}, box {mm(lo)}..{mm(hi)}mm{hint}",
+                    [int(sel.sum()), *map(float, raw.min(0)), *map(float, raw.max(0))]))
         if len(out) == 3:
             break
     return out
@@ -182,7 +190,9 @@ def measure(mod, n=96):
         if kernel.DETAIL:
             lines[-1] += f"; {', '.join(sorted(kernel.DETAIL))} detail: kinks expected, not warned"
         else:
-            warns += _kink_warnings(K[~R], h, getattr(mod, "LANDMARKS", {}), getattr(mod, "PARTS", {}))
+            kw = _kink_warnings(K[~R], h, getattr(mod, "LANDMARKS", {}), getattr(mod, "PARTS", {}))
+            warns += [(k, t) for k, t, _ in kw]
+            M["kink_clusters"] = {k: c for k, _, c in reversed(kw)}  # the largest cluster per key
     corr = getattr(mod, "FIT_CORRECTIONS", {})
     if corr:
         M["fit"] = {k: float(v) * 1000 for k, v in corr.items()}
