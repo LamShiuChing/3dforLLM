@@ -28,6 +28,9 @@ SHORT = {"glabella": "g", "nasion": "n", "pronasale": "prn", "subnasale": "sn", 
 
 
 def load(path):
+    if str(path).endswith(".fc"):  # an engine command script: build it
+        from .engine import load as load_fc
+        return load_fc(path)
     kernel.reset()
     spec = importlib.util.spec_from_file_location("scene", path)
     mod = importlib.util.module_from_spec(spec)

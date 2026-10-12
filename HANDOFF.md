@@ -79,6 +79,16 @@ The example itself is unchanged: it is the frozen exp04 result.
 - Checked on a scratch face copy: ear `flare` 0.004 → 0.010 was accepted (`seating ear 58%->45%`), → 0.016 was reverted (`+WARN seating ear`, 33%).
 - Open: a seating drop that stays above the 40% warning is not a regression; kink keys include `near <landmark>`, so a cluster that moves to another landmark counts as new.
 
+**Engine step A, done** (`formcode/engine.py`, `tests/test_engine.py`): `Engine().do(batch) -> reply`, `Scene` (named nodes,
+`fc()`, `absolute_placements()`, `build()`), `parse()` (ast literals + `on()`/`rel()`, never executed), `python -m formcode repl`;
+`render.load` builds `.fc` scripts. Choices to revisit:
+- default `blend` is 0.01 m; `code(name, src)` also takes `op=`/`blend=`; a legacy `.py` becomes one `code` node holding the whole file.
+- marks resolve in stage 2 against the base; a shape in stage 1 may use a mark only if that mark doesn't sit on the body.
+- fit radius per target = 4x nearest-neighbour target distance, clipped to 5-20% of the base size; curves are sampled at 1/3 of the mean control-point gap (step F tunes both).
+- auto-frame: a shrinking-grid bbox search from an 8 m cube, FRAME half = 0.55 x the largest extent (face: 0.173 vs the hand-set 0.18; still `warnings: none`).
+- `rename` updates references in `at/a/b/through/along`; `delete` of a referenced node fails the batch at build.
+- every changed batch rebuilds everything and runs the full `measure()` (face ~10 s): step D's job.
+
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
 - B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.

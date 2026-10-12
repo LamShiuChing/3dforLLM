@@ -1,11 +1,16 @@
 """usage: python -m formcode scene.py out.png [cx,cy,cz,half] [--keep]   (render + report + version; --keep accepts a regression)
-       python -m formcode scene.py out.glb [res]                       (mesh export over the scene's FRAME)"""
+       python -m formcode scene.py out.glb [res]                       (mesh export over the scene's FRAME)
+       python -m formcode repl                                         (engine commands from stdin, one batch per line)"""
 import sys
 import time
 
 from .render import export_mesh
 from .versions import run
 
+if sys.argv[1:] == ["repl"]:
+    from .engine import repl
+    repl()
+    sys.exit()
 args = [a for a in sys.argv[1:] if a != "--keep"]
 if len(args) < 2:
     sys.exit(__doc__)
