@@ -5,3 +5,4 @@ __pycache__/
 .remember/
 *.egg-info/
 runs/
+work/

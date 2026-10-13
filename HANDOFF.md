@@ -1,4 +1,4 @@
-# HANDOFF — read this first (state as of 2026-10-12, session 2: P0 done)
+# HANDOFF — read this first (state as of 2026-10-12: engine steps A-F done)
 
 ## What this project is
 **formcode**: an open-source, lightweight protocol + engine that lets *frozen* LLMs (Claude, GPT, …, no training)
@@ -170,8 +170,32 @@ optional extra `formcode[mcp]` (`mcp>=2.3`, the official SDK v2: `MCPServer`, a 
   `sys.stdout` to stderr; `test_mcp_stray_prints_stay_off_the_wire` fails without it.
 - `__main__.py` now runs under `if __name__ == "__main__":`. It was not actually broken for `python -m formcode`
   (multiprocessing's spawn skips re-running `*.__main__` modules), but it is the standard guard.
-- Connect from Claude Code: `claude mcp add --transport stdio formcode -- D:/3dforLLM/.venv/Scripts/python.exe -m formcode mcp --root <workspace>` (PROTOCOL §8). Not yet tried from a real Claude Code session (PROTOCOL §10.1).
-- **Next: step F**: connect a real Claude Code session, rebuild the face through the protocol only and measure against session 1 (PROTOCOL §10).
+- Connect from Claude Code: `claude mcp add --transport stdio formcode -- D:/3dforLLM/.venv/Scripts/python.exe -m formcode mcp --root <workspace>` (PROTOCOL §8). Registered locally with `--root D:/3dforLLM/work` (`work/` is gitignored).
+
+**Engine step F done (face through the protocol, real Claude Code session)**: `work/face_f.fc`, `work/face_f.glb`
+(194k verts, watertight), versions in `work/runs/face_f/`. Measured against PROTOCOL §10:
+1. A real session connects and builds: yes.
+2. Protocol only: eyes, ears and all 17 strokes are relative (`rel`/`on`/landmark names; eye and ear are skin-projected).
+   Blockout shapes and landmarks are still absolute xyz (counted, allowed). The first build matched session 1 to the
+   pixel (nose close-up, 0.0 mean diff).
+3. Replies ≤ 150 tokens: yes. **Median edit ≤ 2 s: no**: edit batches with a `look` took 9-13 s; `fix(1)` alone 1.3 s.
+   A pure edit without a render wasn't timed.
+4. Bad change reverted, fix works: yes (philtrum width 6 mm -> `fix(1)` width 10 mm). A too-short nostril was reverted
+   with no fix offered.
+5. Vs session 1: ~20 tool calls (tokens not counted). Engine caught 3 (scale lint: mouth_slit, nostril, philtrum).
+   Caught by looking, missed by the engine: alar groove reads as a raised ring (fixed: alar_wing width, groove amount),
+   nostril carve hollows the top of the upper lip (fixed: nostril moved up into the nose), mouth-corner pockets (fixed:
+   shorter slit, softer corner crease), **a skin tab under the nose (open**: the philtrum strokes and the nostril carve
+   both produce it, ~8 delete-and-look rounds to isolate, stopped after 3 fix attempts), **eye: a dark void at the inner
+   corner and jagged lid facets (open)**, **ear: a cupped bean, no helix/antihelix (open)**.
+- Fixed: the MCP server only sent `look` images whose `[image]` started a line; after an edit, or with two looks in one
+  batch, they share a line joined by " | ", so they came back as text only (`5b18577`).
+- Rough edges found: the `fix(n)` reply shows only the fix, not the re-applied batch; `look(size=)` is pixels, no zoom
+  span; no bottom view (the nose underside needs one); neck-cut kink warnings (3-4 samples) flicker in and out on
+  unrelated edits; `set("columella", pin=False)` silently changes nothing while a pinned curve passes through it.
+- Takeaway: placement and the revert loop work; the senses only catch scale. Flaps, voids and crude parts still need a human (or the LLM) looking.
+- **Next (user's call)**: (a) a sense for thin flaps/tabs and voids, (b) kernel fixes for the eye's inner corner/lids and
+  the ear's shape, or (c) speed.
 
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
