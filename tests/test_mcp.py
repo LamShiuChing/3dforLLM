@@ -29,6 +29,8 @@ def test_mcp_server_end_to_end(tmp_path):
                 assert not r.is_error and r.content[0].text.startswith("[image] ")
                 assert [x.type for x in r.content] == ["text", "image"] and r.content[1].mime_type == "image/png"
                 assert base64.b64decode(r.content[1].data)[:8] == b"\x89PNG\r\n\x1a\n"
+            r = await call('set("ball", size=0.05)\nlook("front")\nlook("side")')  # images after an edit, sharing a line
+            assert [x.type for x in r.content] == ["text", "image", "image"]
             r = await call('code("c", "def sdf(p): return p[:, 0]")')
             assert r.is_error and "code execution is off" in r.content[0].text
             r = await call("tree()")

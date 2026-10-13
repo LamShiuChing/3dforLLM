@@ -41,7 +41,7 @@ def serve(allow_code=False, root=None):
                 return CallToolResult(content=[TextContent(type="text", text=f"error: {type(e).__name__}: {e}")], is_error=True)
             dirs = [d for d in (eng.root, eng.tmp) if d]  # only images the engine wrote: inside the root, or its temp dir
             content = [TextContent(type="text", text=reply)]
-            for p in re.findall(r"^\[image\] (.+?\.png) \(", reply, re.M):
+            for p in re.findall(r"\[image\] (.+?\.png) \(", reply):  # anywhere: results share a line, joined by " | "
                 p = Path(p).resolve()
                 if p.is_file() and any(p.is_relative_to(Path(d).resolve()) for d in dirs):
                     content.append(ImageContent(type="image", data=base64.b64encode(p.read_bytes()).decode(), mime_type="image/png"))
