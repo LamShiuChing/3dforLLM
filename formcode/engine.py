@@ -170,8 +170,8 @@ def _combine(a, b, op, k):
     return lambda p: K.smax(a(p), b(p), k)
 
 
-def _eval(f, g, n=32768):  # bounded memory: fit() builds (points x 48 x 3) temporaries
-    return np.concatenate([f(g[j:j + n]) for j in range(0, len(g), n)])
+def _eval(f, g):  # in chunks, in threads
+    return K.peval(f, g)
 
 
 def _bbox(f):
@@ -190,6 +190,17 @@ def _bbox(f):
         lo, hi = hit.min(0) - h, hit.max(0) + h
         c, half = (lo + hi) / 2, (hi - lo).max() / 2
     return lo, hi
+
+
+_BASE_BOX = {}
+
+
+def _base_box(sig, base):
+    """_bbox of the base, remembered for the last base (edits after the blockout leave it alone)."""
+    if sig not in _BASE_BOX:
+        _BASE_BOX.clear()
+        _BASE_BOX[sig] = _bbox(base)
+    return _BASE_BOX[sig]
 
 
 def _step(P):
@@ -463,10 +474,11 @@ class Scene:
     def _shape(self, kind, P, ctx):
         if kind == "capsule":
             a, b = self._place(P["a"], ctx), self._place(P["b"], ctx)
-            c = (a + b) / 2
+            c, where = (a + b) / 2, (a.tolist(), b.tolist())
             g = lambda q: K.capsule(q, a, b, P["r"], P.get("r2"))
         else:
             c, s = self._place(P["at"], ctx), P["size"]
+            where = c.tolist()
             g = {"sphere": lambda q: K.sphere(q, c, s),
                  "ellipsoid": lambda q: K.ellipsoid(q, c, s),
                  "box": lambda q: K.box(q, c, s, P.get("round", 0.0)),
@@ -476,6 +488,7 @@ class Scene:
         def f(p):
             q = K.mirror_x(p) if mirror else p
             return g(K.rot(q, r[0], r[1], center=c) if r else q)
+        f.sig = repr((kind, P, where))  # what the shape is, placements resolved (for the measure caches)
         return f
 
     def _code(self, P, ctx):
@@ -494,7 +507,7 @@ class Scene:
         ctx = dict(body=None, mb=None, solo={}, L={}, curves={}, meta={})
         nodes = {}  # name -> (kind, own sdf, mirrored): what measure(name) / look(at=name) size up
         items = list(self.nodes.items())
-        base = None
+        base, sig = None, []
         for name, (kind, P) in items:  # 1. shapes + code -> base
             if kind in SHAPES or kind == "code":
                 with _tag(name):
@@ -505,9 +518,12 @@ class Scene:
                     nodes[name] = (kind, f, bool(P.get("mirror")))
                     if name == skip:
                         continue
+                    sig.append(f.sig if kind in SHAPES else repr(P))
                     base = f if base is None else _combine(base, f, P.get("op", "union"), P.get("blend", BLEND))
         if base is None:
             return None
+        b0 = base
+        stages = [("base", tuple(sig), lambda v, p: b0(p), None)]  # the build as stages of the grid cache (gridcache.py)
         ctx["body"] = ctx["mb"] = base
         pins, T = [], []
         for name, (kind, P) in items:  # 2. marks + curves, then fit
@@ -528,8 +544,9 @@ class Scene:
         if T:
             with _tag("fit"):
                 T = np.unique(np.array(T), axis=0)
-                lo, hi = _bbox(base)
+                lo, hi = _base_box(tuple(sig), base)
                 f = K.fit(base, T, radius=_radii(T, (hi - lo).max()))[0]
+                stages.append(f.stage)
         ctx["body"], ops = f, []
         for name, (kind, P) in items:  # 3. strokes
             if kind == "stroke":
@@ -543,11 +560,13 @@ class Scene:
             with _tag("strokes"):
                 f = K.sculpt(f, ops)
                 f(np.zeros((1, 3)))
+                stages.append(f.stage)
         for name, (kind, P) in items:  # 4. eye / ear
             if kind in ("eye", "ear"):
                 with _tag(name):
                     before, f = f, (K.eye if kind == "eye" else K.ear)(f, **P)
                     f(np.zeros((1, 3)))
+                    stages.append((name, *f.stage[1:]))
                     nodes[name] = (kind, K.ATTACHED[-1][1] if kind == "ear" else _delta(before, f), True)
         with _tag("frame"):
             lo, hi = _bbox(f)  # auto-frame: the measured/rendered cube always holds the whole model
@@ -557,7 +576,7 @@ class Scene:
         m.update(sdf=f, LANDMARKS=L, PROFILE=prof or m.get("PROFILE", []),
                  PARTS={**m.get("PARTS", {}), **{n: g for n, g in ctx["solo"].items()
                                                  if self.nodes[n][0] in SHAPES and self.nodes[n][1].get("op", "union") in ("union", "separate")}},
-                 FIT_CORRECTIONS={**m.get("FIT_CORRECTIONS", {}), **corr}, NODES=nodes,
+                 FIT_CORRECTIONS={**m.get("FIT_CORRECTIONS", {}), **corr}, NODES=nodes, STAGES=stages,
                  CURVES={n: K.spline(P, _step(P)) for n, P in ctx["curves"].items()},
                  FRAME=(*map(float, (lo + hi) / 2), float(0.55 * (hi - lo).max())))
         return SimpleNamespace(**m)

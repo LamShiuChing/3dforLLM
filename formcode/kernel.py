@@ -3,7 +3,26 @@
 Units are meters. Axes: y up, +z toward the viewer (the subject's front), x = the subject's left.
 Names ending in _L are mirrored to _R. A scene is a Python file that does `from formcode import *` and defines `sdf(p)`.
 """
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
+from scipy.spatial import cKDTree
+
+_POOL = None
+
+
+def peval(f, p, n=32768):
+    """f(p) in chunks on a thread pool (numpy releases the GIL): the same values as f(p), every point is independent.
+    Inside a pool thread it evaluates directly (no nested waits)."""
+    # ponytail: an sdf is ~450 numpy passes per call; the GIL and that overhead cap threads at ~3-5x (numba would fuse them)
+    global _POOL
+    if len(p) <= n or threading.current_thread().name.startswith("peval"):
+        return f(p)
+    if _POOL is None:
+        _POOL = ThreadPoolExecutor(min(16, os.cpu_count() or 1), thread_name_prefix="peval")
+    return np.concatenate(list(_POOL.map(f, [p[j:j + n] for j in range(0, len(p), n)])))
 
 # ---------- the borrowed vocabulary (Shadertoy / Inigo Quilez idioms, numpy edition) ----------
 
@@ -224,13 +243,18 @@ def fit(base, targets, radius=0.022, lam=1e-7):
     Phi = wendland(np.linalg.norm(T[:, None] - T[None], axis=-1) / radius[None])
     d0 = base(T)
     w = np.linalg.solve(Phi + lam * np.eye(len(T)), d0)
+    tree, rmax = cKDTree(T), radius.max()
 
-    def f(p):
-        acc = np.zeros(len(p))
-        for j in range(0, len(T), 48):
-            r = np.linalg.norm(p[:, None, :] - T[None, j:j + 48], axis=-1) / radius[None, j:j + 48]
-            acc += wendland(r) @ w[j:j + 48]
-        return base(p) - acc
+    def apply(v, p):
+        if not len(p):
+            return v
+        pr = cKDTree(p).sparse_distance_matrix(tree, rmax, output_type="ndarray")  # wendland is 0 past the radius:
+        o = np.lexsort((pr["j"], pr["i"]))  # only near (point, target) pairs add, each point in one order (exact in chunks)
+        i, j = pr["i"][o], pr["j"][o]
+        r = np.linalg.norm(p[i] - T[j], axis=-1) / radius[j]
+        return v - np.bincount(i, wendland(r) * w[j], minlength=len(p))
+    f = lambda p: apply(base(p), p)
+    f.stage = ("fit", (T.tobytes(), radius.tobytes(), d0.tobytes()), apply, None)
     return f, d0
 
 
@@ -240,15 +264,19 @@ def sculpt(f, ops):
     crease/ridge: along the curve through points (snapped to surface), depth/height = amount, falloff = width.
     inflate: at points[0], radius = width, amount = outward push.  carve: ellipsoid cut, amount = radii, width = blend k.
     sym=True applies the op on both sides (define it on the left, x>0)."""
-    built = []
-    for name, kind, pts, amount, width, sym in ops:
+    built, names = [], []
+    snap = [np.asarray(pts, float) for _, kind, pts, *_ in ops if kind != "carve"]
+    snap = iter(np.split(on_surface(f, np.concatenate(snap)), np.cumsum([len(s) for s in snap])[:-1]) if snap else [])
+    for name, kind, pts, amount, width, sym in ops:  # (all points snapped in one call: same points, fewer calls)
+        names.append(name)
         if kind == "carve":
             built.append((kind, np.asarray(pts[0], float), amount, width, sym))
             _lint(name, "length", 2 * max(amount))
             _lint(name, "width", 2 * min(amount))
             _edge(pts[0], 1.5 * (max(amount) + width), sym)
             continue
-        C = spline(on_surface(f, pts), width / 2) if kind in ("crease", "ridge", "groove") else on_surface(f, pts)
+        S = next(snap)
+        C = spline(S, width / 2) if kind in ("crease", "ridge", "groove") else S
         _lint(name, "width", width)
         _lint(name, "length", float(np.linalg.norm(np.diff(C, axis=0), axis=1).sum()))
         reach = width + (amount if kind == "groove" else 0)
@@ -257,8 +285,8 @@ def sculpt(f, ops):
         lo, hi = C.min(0) - reach, C.max(0) + reach
         built.append((kind, C, amount, width, sym, lo, hi))
 
-    def g(p):
-        d = f(p)
+    def apply(v, p):
+        d = v.copy()
         for op in built:
             kind, C, amount, width, sym = op[:5]
             q = mirror_x(p) if sym else p
@@ -278,6 +306,11 @@ def sculpt(f, ops):
                 off = (amount if kind == "crease" else -amount) * wendland(dist_to_curve(q[m], C) / width)
             d[m] += off
         return d
+    g = lambda p: apply(f(p), p)
+    # per op: a signature and the box it changes (None = anywhere: a carve is an unmasked cut)
+    elems = [(n, repr([np.asarray(x).tobytes() if isinstance(x, np.ndarray) else x for x in op]),
+              None if op[0] == "carve" else (op[5], op[6], op[4])) for n, op in zip(names, built)]
+    g.stage = ("strokes", tuple(e[1] for e in elems), apply, elems)
     return g
 
 
@@ -327,14 +360,16 @@ def eye(f, center, r, en, ex, up, lo, lid=0.0018, recess=0.0005):
     cu, ru = _circle3(en[:2], up[:2], ex[:2])
     cl, rl = _circle3(en[:2], lo[:2], ex[:2])
 
-    def g(p):
+    def apply(v, p):
         q = mirror_x(p)
         ap = np.maximum(length(q[:, :2] - cu) - ru, length(q[:, :2] - cl) - rl)  # almond in x,y
         ap = smax(ap, np.abs(q[:, 2] - (c[2] + r)) - 0.9 * r, 0.001)            # extrude in front of the eye
-        d = smin(f(p), sphere(q, c, r + lid), 0.004)                              # lids wrap the ball
+        d = smin(v, sphere(q, c, r + lid), 0.004)                                 # lids wrap the ball
         d = cut(d, ap, 0.0008)                                                    # open the almond
         ball = np.minimum(sphere(q, c, r), sphere(q, c + (0, 0, 0.42 * r), 0.68 * r))  # eyeball + cornea
         return np.minimum(d, ball)
+    g = lambda p: apply(f(p), p)
+    g.stage = ("eye", np.array([*c, *cu, ru, *cl, rl, r, lid]).tobytes(), apply, None)
     return g
 
 
@@ -356,8 +391,12 @@ def ear(f, tragion, flare=0.004, size=1.0, splay=0.0):
         root = ellipsoid(q0, t + S(0.0, 0.006, -0.008), S(0.006, 0.024, 0.012))  # front third fused to the head
         return smin(smin(cut(cut(shell, concha, 0.003), scapha, 0.002), lobe, 0.004), root, 0.004)
 
+    part.sig = np.array([*t, flare, size, splay], float).tobytes()  # what the part is (the measure caches)
     ATTACHED.append(("ear", part, f))
     _edge(t, 0.04 * size, True)
-    return lambda p: smin(f(p), part(p), 0.005)
+    apply = lambda v, p: smin(v, part(p), 0.005)
+    g = lambda p: apply(f(p), p)
+    g.stage = ("ear", part.sig, apply, None)
+    return g
 
 

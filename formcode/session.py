@@ -15,6 +15,7 @@ import numpy as np
 from . import goals
 from .engine import COMMANDS, FcError, Scene, _call, _did, _err, _restore, _snap, inside, parse
 from .goals import _extent, _point
+from .gridcache import GridCache
 from .render import DEFAULT_VIEWS, compare, frame, render
 from .senses import measure, mm, text
 from .versions import History, verdict
@@ -70,6 +71,7 @@ class Engine:
         self.root = Path(root or Path.cwd()).resolve()  # the workspace: open/save/export paths must stay inside it
         self.scene, self.model, self.metrics = Scene(allow_code=allow_code, root=self.root), None, None
         self.h, self.b, self.tmp, self.looks = History(), None, None, 0
+        self.cache = GridCache()  # the measure grid per build stage: an edit re-evaluates only what it changed
 
     def do(self, commands):
         t0 = time.time()
@@ -101,7 +103,7 @@ class Engine:
                 _restore(snap)  # the kernel registries belong to the model still in use
                 i = touched.get(e.node, last)
                 return _err(i, lines[i - 1].strip(), e)
-            m = measure(model) if model is not None else None
+            m = measure(model, cache=self.cache) if model is not None else None
         cur = h.get(h.cur)
         b.prev = cur if changed else cur and h.get(cur["parent"])  # what look(before=True) compares with
         res = []
@@ -144,7 +146,7 @@ class Engine:
 
     def _reverted(self, e, m, res, t0):
         bad = e["why"]
-        fx = e["fixes"] = goals.fixes(self.b.work, m, bad)
+        fx = e["fixes"] = goals.fixes(self.b.work, m, bad, self.cache)
         out = [_cut(f"REVERTED {e['version'].split('-')[0]}: " + " | ".join(bad), 200)]
         out += [_cut(t, 110) for k, t in m["warnings"] if f"+WARN {k}" in bad][:3]
         out += [f"fix {j}: {c} -> {r}" for j, (c, r, *_) in enumerate(fx, 1)]
@@ -249,7 +251,7 @@ class Engine:
             self.looks += 1
             out = self._dir() / f"look{self.looks:03d}-{view.replace('/', '')}.png"
             res = size if len(LOOK[view]) == 1 else size // 2
-            self._render(mod, self.b.work.fc(), out, res, c, half, LOOK[view])
+            render(None, str(out), res, c, half, names=LOOK[view], mod=mod, fc=self.b.work.fc())
             if before:
                 p = self.b.prev
                 if p is None:
@@ -261,7 +263,7 @@ class Engine:
                 finally:
                     _restore(snap)
                 bo = out.with_name(out.stem + "-before.png")
-                self._render(pm, p["fc"], bo, res, c, half, LOOK[view])
+                render(None, str(bo), res, c, half, names=LOOK[view], mod=pm, fc=p["fc"])
                 compare(bo, out, out, (p["version"], "now"))
             return f"[image] {out.as_posix()} ({view}{f' at {at}' if at else ''}{', before|now' if before else ''}, {2 * half:.3g} m across)"
         return q
@@ -296,17 +298,6 @@ class Engine:
             self.tmp = d = self.tmp or Path(tempfile.mkdtemp(prefix="formcode-"))
         d.mkdir(parents=True, exist_ok=True)
         return d
-
-    def _render(self, mod, fc, out, res, c, half, views):
-        path = None
-        if len(views) > 1:  # several views render in worker processes, which rebuild the scene from a file
-            path = out.with_suffix(".fc")
-            path.write_text(fc, encoding="utf-8", newline="\n")
-        try:
-            render(str(path) if path else None, str(out), res, c, half, names=views, mod=mod)
-        finally:
-            if path:
-                path.unlink()
 
 
 COMMANDS.update({n[2:]: n for n in dir(Engine) if n.startswith("c_")})

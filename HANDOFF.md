@@ -122,6 +122,43 @@ fix search + `fix(n)`, and a workspace root for file paths.
 - Open: seat's bounded search may land far from the start (face: splay -30 -> 20.3, flare kept at 10 mm); a "closest to
   the current value" preference would read better. Fix candidates are full rebuilds (step D: region-only checks).
 
+**Engine step D done (speed)**. New: `formcode/gridcache.py`, `benchmarks/face.fc` (face.py as 63 native nodes: 12
+blockout shapes, 31 marks, profile + back curves, 16 strokes, eye, ear) and `benchmarks/bench.py`, plus `tests/test_incremental.py`.
+Medians of 3 runs on a busy machine (full table in PROTOCOL §9):
+
+| | before | after |
+|---|---|---|
+| face: median edit (stroke / cheek move / bump / keep / seat) | 17.3 s | 2.5 s (1.8 s quieter) |
+| face: flare 0.016 → REVERTED + fix search | 37.2 s | 6.4 s |
+| face: `look("all")` / `look(at="ear")` (5 views) / one view | 7.8 / 8.9 s / – | 2.1 / 3.1 / 1.9 s |
+| face: `open` | 17.0 s | 2.6 s |
+| small scene (`bench.py small`): median edit | 4.3 s | 0.74 s |
+| face export (res 320) | ~43 s | ~15 s |
+| `pytest -q` | 87 s (57 tests) | 56-66 s (58 tests) |
+
+- Profile before: `kernel.fit` evaluation was 58% of all time (a dense 48-target block per point), then the kink sense
+  (24%) and the per-view process pools, each rebuilding the scene. After: the kink sense (0.7-1.1 s) and the build (0.3-0.6 s) dominate.
+- What changed: the fit sums only the (point, target) pairs within each target's radius (KD tree, pairs sorted, so it's
+  exact in any chunking). A thread pool runs the evaluations (`kernel.peval`), and kink/normal evaluations are batched. Kernel stages expose
+  `stage = (key, sig, apply(v, p), elems)`, `Scene.build` lists them in `mod.STAGES`, and the engine's `GridCache` redoes a
+  stage only where its input changed bit for bit, or in the boxes of changed strokes. Part boxes and the ear's seating sample are cached by
+  signature. The base bbox for the fit radii is memoized. All strokes snap onto the surface in one call. Multi-view `look` runs in a warm process pool
+  (workers keep the last built scene); a single view traces its rays in threads.
+- Exactness: cached grid values equal fresh ones bit for bit, so the measure is identical. Tested on a seeded random 12-step
+  edit sequence. Goldens are untouched and pass (the fit's summation order changed only in the last bits).
+- Fixed a step-C bug: `seat` on an ear with a knob past its range (flare 16 mm > 10 mm) made an empty search window,
+  and the ValueError escaped the fix search.
+- Tried and dropped: snapping the auto-frame to a lattice, so the grid survives frame-moving edits (e.g. an ear splay
+  that shifts the frame by 0.4 mm). It changed the legacy face's grid, and the re-drawn kink samples then showed a
+  3-sample flicker cluster (test_open_legacy_face). Such edits now redo the whole grid.
+- `benchmarks/face.fc` vs `examples/face.py`: the same drift and profile numbers within 0.1 mm, and seating ear 58%. It
+  looks the same apart from shading (a .fc can't set EPS/STEP/AO), a slightly fuller top-back of the cranium
+  (heuristic fit radii vs face.py's 0.045 m on the back curve), and one extra warning: `scale: mouth_slit length 58.4mm`
+  (the strokes snap onto a slightly different fitted skin). Its engine export at res 320 is watertight.
+- Open: a 2 s median under load. The kink sense can't be cached while its samples are re-drawn from the whole shell (a
+  fixed-lattice sampling would make it cacheable, but it changes the sense). A fit change spreads over the whole surface. Threads cap at
+  ~3-5x (GIL); numba would be the next step (an optional extra, the user decides). Export still rebuilds the scene per slab worker.
+
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
 - B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.

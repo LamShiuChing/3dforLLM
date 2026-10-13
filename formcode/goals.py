@@ -139,8 +139,8 @@ def _seat_ear(scene, name, target):
         for frac in (0.1, 0.25, 0.5, 1.0):
             if err(best) <= ok:
                 break
-            w = frac * (hi - lo)
-            a, b = max(lo, x[k] - w), min(hi, x[k] + w)
+            w, x_in = frac * (hi - lo), min(max(x[k], lo), hi)  # a knob set past its range searches from the range's end
+            a, b = max(lo, x_in - w), min(hi, x_in + w)
             r = minimize_scalar(lambda v: err(c({**x, k: v})), bounds=(a, b), method="bounded",
                                 options=dict(xatol=(hi - lo) / 300, maxiter=12))
             if err(c({**x, k: r.x})) < err(best):
@@ -304,10 +304,10 @@ def _candidates(scene, key):
     return []
 
 
-def fixes(scene, m, bad):
+def fixes(scene, m, bad, cache=None):
     """For each new warning in `bad`, try catalogue fixes on top of the rejected batch (`scene`, its metrics `m`), so
     the LLM's intent is kept. Keep those that clear the warning and add no new regression. At most BUDGET builds,
-    SHOW fixes. -> [(command, predicted result, its reply, the scene's .fc with the fix)]"""
+    SHOW fixes. cache: the engine's GridCache. -> [(command, predicted result, its reply, the scene's .fc with the fix)]"""
     out, tried = [], 0
     snap = _snap()
     try:
@@ -321,7 +321,7 @@ def fixes(scene, m, bad):
                 try:
                     r = seat(s, *args, **kw) if c == "seat" else _call(s, c, args, kw)
                     mod = _build(s)
-                    mc = measure(mod)
+                    mc = measure(mod, cache=cache)
                     r = r(mod, mc) if callable(r) else r
                 except FcError:
                     continue

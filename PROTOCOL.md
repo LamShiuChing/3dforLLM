@@ -132,6 +132,36 @@ Every error names the line, the cause and a fix.
 | `look` | ≤ 3 s | warm render worker pool; render only the requested view and region |
 | fix search | ≤ 3 s extra, only when there is a new warning | candidate fixes evaluated on the changed region only |
 
+**Measured (step D, 2026-10-12)** with `benchmarks/bench.py face --runs 3` (`benchmarks/face.fc`: face.py as 63 engine
+nodes), median of 3 runs, on a busy i9-14900KF (a game was running: absolute numbers are noisy, the ratios hold):
+
+| command | before (HEAD 7b2fbcf) | after |
+|---|---|---|
+| `open` | 17.0 s | 2.6 s |
+| `set` a stroke amount | 17.2 s | 1.7 s |
+| `move` a cheek shape | 16.7 s | 2.5 s |
+| `add` a 4 mm bump | 17.3 s | 2.1 s |
+| `set("ear", flare=0.016)` → REVERTED + fix search | 37.2 s | 6.4 s |
+| `keep()` | 17.1 s | 2.6 s |
+| `seat("ear")` | 20.9 s | 3.8 s |
+| `look(at="ear")` (5 views) / one view | 8.9 s / – | 3.1 s / 1.9 s |
+| `look("all")` | 7.8 s | 2.1 s |
+| **median edit** | **17.3 s** | **2.5 s** (1.8 s in a quieter run) |
+
+How, now: the measure grid is cached per build stage (`gridcache.py`; base, fit, strokes, eye, ear) and an edit
+re-evaluates only the grid points whose stage input changed bit for bit, plus the boxes of changed strokes, so cached
+values equal fresh ones exactly (`tests/test_incremental.py`). Part boxes and the ear's seating sample are cached by
+the part's signature. The fit sums only the (point, target) pairs inside each target's radius. Evaluations run in a
+thread pool (`kernel.peval`), and kink and normal evaluations are batched into a few large calls. Multi-view `look`
+uses a warm process pool whose workers keep the last built scene; a single view traces its rays in threads.
+Not met yet: the 2 s median under load, `look` with 5 zoomed views, and the fix search (≈3-4 s extra). What dominates
+now: the kink sense (~630k sdf evaluations near the surface, 0.7-1.1 s, re-drawn from the whole shell every build, so
+it can't be cached without changing its sampling), the build (0.3-0.6 s, mostly the frame bbox search), and a fit
+change spreading over the whole surface (a shape edit near a mark changes most fit weights by > 1 µm, so most of the
+near-surface grid is redone). The sdf is ~450 numpy passes per call, and threads stop scaling at ~3-5x (GIL and call
+overhead). Next steps: fused evaluation (numba, an optional extra), or kink samples on a fixed lattice so they can
+be cached (a sense change).
+
 ## 10. New P1: done when
 1. The protocol works through the REPL and through MCP. A real Claude Code session connects and builds through it.
 2. **The face is rebuilt through the protocol only:** zero absolute placements for eyes, ears and strokes; every check automatic.

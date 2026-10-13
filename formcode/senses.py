@@ -4,7 +4,7 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 
 from . import kernel
-from .kernel import polygon2d, spline
+from .kernel import peval, polygon2d, spline
 from .render import frame, normals
 
 
@@ -12,19 +12,24 @@ def fmt(v):
     return ",".join(f"{x:+.2f}" for x in v)
 
 
-def seating(part, host, n=64, box=None, left=True):
+def seating(part, host, n=64, box=None, left=True, surf=None):
     """Fraction of the part's surface that touches the host (within 1.5 mm). Low = stuck on. Works for any part vs
     any host (the engine passes a node and the model without it). The grid is fixed: 2n points across +-0.2 m,
     continued past it. box=(lo, hi): only the grid points inside it (the same result if it holds the part's surface,
-    much faster). left: only x>0 (enough for a mirrored part)."""
+    much faster). left: only x>0 (enough for a mirrored part). surf: part_surface(part, ...), if already known."""
+    surf = part_surface(part, n, box, left) if surf is None else surf
+    return float((peval(host, surf) < 0.0015).mean()) if len(surf) else 0.0
+
+
+def part_surface(part, n=64, box=None, left=True):
+    """The fixed-grid points within 2 mm of the part's surface (seating's sample)."""
     h = 0.4 / (2 * n - 1)
     lo, hi = (np.full(3, -0.2), np.full(3, 0.2)) if box is None else box
     s = [-0.2 + h * np.arange(np.ceil((a + 0.2) / h - 1e-9), np.floor((b + 0.2) / h + 1e-9) + 1) for a, b in zip(lo, hi)]
     g = np.stack(np.meshgrid(*s, indexing="ij"), -1).reshape(-1, 3)
     if left:
         g = g[g[:, 0] > 0]
-    surf = g[np.abs(part(g)) < 0.002]
-    return float((host(surf) < 0.0015).mean()) if len(surf) else 0.0
+    return g[np.abs(peval(part, g)) < 0.002]
 
 
 def mm(v):
@@ -55,14 +60,24 @@ def _connected(f, piece, body, tree, h):
     return bool(near(A) & near(B))
 
 
-def _tangent_turns(f, P, N, t, span, e, k=7):
-    """Normal turn (deg) between neighbours along a short line through each surface point: (largest step, total)."""
+def _fn(f, p, e):
+    """f and its unit normal at p, from one call of f (f may run it in threads; same values as render.normals)."""
+    E = np.eye(3) * e
+    v = f(np.concatenate([p] + [p + x for x in E] + [p - x for x in E])).reshape(7, len(p))
+    n = (v[1:4] - v[4:]).T
+    return v[0], n / np.maximum(kernel.length(n)[:, None], 1e-9)
+
+
+def _tangent_turns(f, P, t, span, e, k=7):
+    """Normal turn (deg) between neighbours along a short line through each surface point, one line per tangent field
+    in t (all in two calls of f): (largest step, total), one row per tangent field."""
     u = np.linspace(-span / 2, span / 2, k)
-    Q = (P[None] + u[:, None, None] * t[None]).reshape(-1, 3)
-    Q = Q - f(Q)[:, None] * normals(f, Q, e)  # back onto the surface
-    Nq = normals(f, Q, e).reshape(k, -1, 3)
-    steps = np.degrees(np.arccos(np.clip((Nq[1:] * Nq[:-1]).sum(-1), -1, 1)))
-    return steps.max(0), steps.sum(0)
+    Q = (P[None, None] + u[None, :, None, None] * t[:, None]).reshape(-1, 3)
+    v, n = _fn(f, Q, e)
+    Q = Q - v[:, None] * n  # back onto the surface
+    Nq = normals(f, Q, e).reshape(len(t), k, -1, 3)
+    steps = np.degrees(np.arccos(np.clip((Nq[:, 1:] * Nq[:, :-1]).sum(-1), -1, 1)))
+    return steps.max(1), steps.sum(1)
 
 
 def kinks(f, g, d, h, n_samples=3000):
@@ -75,12 +90,12 @@ def kinks(f, g, d, h, n_samples=3000):
     e = h * 0.02
     P = shell
     for _ in range(3):
-        P = P - f(P)[:, None] * normals(f, P, e)
+        v, n = _fn(f, P, e)
+        P = P - v[:, None] * n
     N = normals(f, P, e)
     t1 = np.cross(N, rng.normal(size=N.shape))
     t1 /= np.maximum(np.linalg.norm(t1, axis=-1, keepdims=True), 1e-12)
-    m1, s1 = _tangent_turns(f, P, N, t1, h, e)
-    m2, s2 = _tangent_turns(f, P, N, np.cross(N, t1), h, e)
+    (m1, m2), (s1, s2) = _tangent_turns(f, P, np.stack([t1, np.cross(N, t1)]), h, e)
     mx, tot = np.maximum(m1, m2), np.where(m1 > m2, s1, s2)
     return P[(mx > 4) & (mx / np.maximum(tot, 1e-9) > 0.5)], len(P)
 
@@ -122,25 +137,37 @@ def _kink_warnings(K, h, L, parts):
     return out
 
 
-def measure(mod, n=96):
-    """Every sense as data. warnings: (key, text) pairs, key = kind + subject (for diffs); lines: the measurement text."""
+def measure(mod, n=96, cache=None):
+    """Every sense as data. warnings: (key, text) pairs, key = kind + subject (for diffs); lines: the measurement text.
+    cache: a gridcache.GridCache (the engine's): grid values and part boxes are reused where the build didn't change."""
     c, half = frame(mod)
     g = _grid(c, half, n)
     h = 2 * half / (n - 1)
     vox = h ** 3
-    d = mod.sdf(g)
+    F = lambda q: peval(mod.sdf, q)  # threaded, same values
+    key = (*c, half, n)
+    d = cache.field(mod, g, key) if cache is not None and hasattr(mod, "STAGES") else F(g)
     warns, lines = [], []
     M = {"bbox": {}, "seating": {}, "kinks": None, "fit": {}, "drift": {}, "profile": {}}
     parts = getattr(mod, "PARTS", {})
+    boxes = {}  # (grid key, shape sig) -> (lo, hi, voxels inside): a shape's box only changes when the shape does
     for name, f in [("ALL", None)] + list(parts.items()):
-        inside = g[(d if f is None else f(g)) < 0]
-        if not len(inside):
+        sig = getattr(f, "sig", None) and (key, f.sig)
+        box = cache.parts.get(sig) if sig and cache is not None else None
+        if box is None:
+            inside = g[(d if f is None else peval(f, g)) < 0]
+            box = (inside.min(0), inside.max(0), len(inside)) if len(inside) else (None, None, 0)
+        if sig:
+            boxes[sig] = box
+        lo, hi, vol = box
+        if not vol:
             lines.append(f"{name}: empty")
             M["bbox"][name] = None
             continue
-        lo, hi = inside.min(0), inside.max(0)
         M["bbox"][name] = [round(float(x), 4) for x in (*lo, *hi)]
-        lines.append(f"{name}: min={fmt(lo)} max={fmt(hi)} size={fmt(hi - lo)} vol={len(inside) * vox:.3f}")
+        lines.append(f"{name}: min={fmt(lo)} max={fmt(hi)} size={fmt(hi - lo)} vol={vol * vox:.3f}")
+    if cache is not None:
+        cache.parts = boxes
     lab_, k = ndimage.label((d < 0).reshape(n, n, n))
     thin = 0
     if k > 1:  # every piece not connected to the largest one: recheck finer, then warn with the part it belongs to
@@ -152,7 +179,7 @@ def measure(mod, n=96):
             if comp == main:
                 continue
             pts = g[(lab_ == comp).ravel()]
-            if _connected(mod.sdf, pts, body, tree, h):
+            if _connected(F, pts, body, tree, h):
                 thin += 1
                 continue
             owner = min(parts.items(), key=lambda kv: kv[1](pts).mean(), default=("?", None))[0]
@@ -164,7 +191,7 @@ def measure(mod, n=96):
     m[:, 0] *= -1
     over = np.abs(g[d < 0] - c) > half - band
     clipped = bool(over.any())
-    sym = np.abs(mod.sdf(m) - d[shell]).mean()
+    sym = np.abs(F(m) - d[shell]).mean()
     M.update(components=int(k), thin_necks=thin, symmetry_err=float(sym), clipped=clipped)
     lines.append(f"symmetry_err(x)={sym:.4f}  clipped_at_bound={clipped}")
     if clipped:
@@ -172,15 +199,21 @@ def measure(mod, n=96):
         sides = " ".join(sorted({("-+"[int(v > 0)] + "xyz"[i]) for i in range(3) for v in P[np.abs(P[:, i]) > half - band, i]}))
         warns.append((f"clipped at FRAME {sides}", f"WARN clipped at FRAME {sides}: the model extends past it (open mesh); grow or move FRAME"))
 
+    surfs = {}  # part sig -> its surface sample: it only changes when the part does
     for name, (part, host) in {nm: (pa, hh) for nm, pa, hh in kernel.ATTACHED}.items():
-        frac = seating(part, host)
+        sig = getattr(part, "sig", None)
+        surf = cache.surfs.get(sig) if sig and cache is not None else None
+        surfs[sig] = surf = part_surface(part) if surf is None else surf
+        frac = seating(part, host, surf=surf)
         M["seating"][name] = frac
         lines.append(f"seating {name}: {frac:.0%} of surface in contact")
         if frac < 0.40:
             warns.append((f"seating {name}", f"WARN seating {name}: only {frac:.0%} in contact: stuck on / floating (attached ears measure ~55-60%)"))
+    if cache is not None:
+        cache.surfs = surfs
     warns += [("scale: " + " ".join(x.split()[:2]), f"WARN scale: {x}") for x in dict.fromkeys(kernel.LINT)]
 
-    K, total = kinks(mod.sdf, g, d, h)
+    K, total = kinks(F, g, d, h)
     if len(K):
         R = np.zeros(len(K), bool)
         for P_, r in kernel.EDGES:

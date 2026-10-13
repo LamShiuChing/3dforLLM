@@ -44,7 +44,9 @@ def frame(mod):
 
 
 def normals(f, p, e=1e-3):
-    n = np.stack([f(p + d) - f(p - d) for d in np.eye(3) * e], -1)
+    E = np.eye(3) * e
+    v = f(np.concatenate([p + d for d in E] + [p - d for d in E])).reshape(2, 3, len(p))  # one call: f may run it in threads
+    n = (v[0] - v[1]).T
     return n / np.maximum(length(n)[:, None], 1e-9)
 
 
@@ -53,8 +55,8 @@ def render_view(args):
     return trace(load(path), name, res, center, half)
 
 
-def trace(mod, name, res, center, half):
-    f = mod.sdf
+def trace(mod, name, res, center, half, f=None):
+    f = f or mod.sdf
     eps, step_k, max_steps = getattr(mod, "EPS", 1e-3), getattr(mod, "STEP", 0.9), getattr(mod, "MAX_STEPS", 160)
     fwd, up = (np.asarray(v, float) for v in VIEWS[name])
     right = np.cross(fwd, up)
@@ -85,9 +87,26 @@ def trace(mod, name, res, center, half):
     return name, np.clip(img, 0, 255).reshape(res, res).astype(np.uint8)
 
 
-def render(path, out, res=320, center=None, half=None, labels=True, names=None, mod=None):
+_POOL, _BUILT = None, {}  # the warm view workers (one per process, started once); in a worker: its last scene
+
+
+def _view_fc(args):
+    """A pool worker traces one view of an engine scene (.fc text), rebuilding it only when the text changed."""
+    fc, name, res, center, half = args
+    if _BUILT.get("fc") != fc:
+        from .engine import Scene
+        s = Scene(allow_code=True)  # the session that sent it already checked code permission
+        s.replay(fc, "look")
+        _BUILT.update(fc=fc, mod=s.build())
+    return trace(_BUILT["mod"], name, res, center, half)
+
+
+def render(path, out, res=320, center=None, half=None, labels=True, names=None, mod=None, fc=None):
     """Grid of views. center/half default to the scene's FRAME. Landmarks are drawn when the scene defines LANDMARKS.
-    names: the views (default the scene's VIEW_NAMES); one view is traced in-process. mod: the scene, already built."""
+    names: the views (default the scene's VIEW_NAMES). mod: the scene, already built. One view is traced here, its
+    rays in threads; several in worker processes: the engine's warm pool given the scene's .fc text (fc), else one
+    process per view loading `path`."""
+    global _POOL
     mod = mod or load(path)
     c, h = frame(mod)
     center = c if center is None else np.asarray(center, float)
@@ -95,7 +114,10 @@ def render(path, out, res=320, center=None, half=None, labels=True, names=None, 
     names = names or getattr(mod, "VIEW_NAMES", DEFAULT_VIEWS)
     cols = 1 if len(names) == 1 else 2 if len(names) <= 4 else 3
     if len(names) == 1:
-        tiles = dict([trace(mod, names[0], res, center, half)])
+        tiles = dict([trace(mod, names[0], res, center, half, lambda q: kernel.peval(mod.sdf, q, 16384))])
+    elif fc is not None:
+        _POOL = _POOL or ProcessPoolExecutor(6)
+        tiles = dict(_POOL.map(_view_fc, [(fc, n, res, center, half) for n in names]))
     else:
         with ProcessPoolExecutor(len(names)) as ex:
             tiles = dict(ex.map(render_view, [(path, n, res, center, half) for n in names]))
