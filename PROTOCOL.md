@@ -118,10 +118,21 @@ Replies are plain ASCII (`->`, `|`, `...`): `→`, `·` and `…` garble on a Wi
 Every error names the line, the cause and a fix.
 
 ## 8. Transport
-- **MCP server** (stdio), the standard way LLM apps call tools. It exposes **one tool**, `formcode(commands: str)`.
-  - The tool description *is* the cheat sheet: §4 and §5 compressed to about 300 tokens. One tool costs fewer tokens per session than 20 tools.
-  - Replies are text. `look` adds an image (MCP image content, base64 PNG). Errors set `isError: true`.
-  - Built on the official Python SDK (`mcp` on PyPI, MIT), as an optional extra `formcode[mcp]`, so the core stays numpy, scipy and pillow.
+- **MCP server** (stdio), the standard way LLM apps call tools: `python -m formcode mcp [--allow-code] [--root DIR]`
+  (`formcode/mcp_server.py`). It exposes **one tool**, `formcode(commands: str)`, backed by one `Engine` per server process;
+  `--allow-code` and `--root` mean the same as for the REPL (defaults: code off, root = the working directory).
+  - The tool description *is* the cheat sheet: §4 and §5 compressed to 1191 chars, about 300 tokens (chars/4). One tool costs fewer tokens per session than 20 tools.
+  - The text reply is `Engine.do()`'s reply unchanged. Each `[image] <path>` line of a `look` also comes back as MCP image
+    content (base64 PNG), read only from inside the root or the engine's own temp dir (scenes without a path). A reply
+    starting `error line` sets `isError: true`; `REVERTED` does not (it is normal feedback).
+  - Calls run one at a time (the SDK runs sync tools in worker threads; a lock serializes them). stdout is the protocol
+    channel: the SDK points fd 1 at stderr while serving (spawned workers inherit it), and each call sends `sys.stdout`
+    to stderr, so prints in `code()` scenes never reach the wire.
+  - Built on the official Python SDK (`mcp` on PyPI, MIT; v2, `MCPServer`), as an optional extra `formcode[mcp]`
+    (`pip install -e ".[mcp]"`), so the core stays numpy, scipy and pillow.
+  - Connect from Claude Code (stdio; everything after `--` is the server command):
+    `claude mcp add --transport stdio formcode -- D:/3dforLLM/.venv/Scripts/python.exe -m formcode mcp --root D:/my/workspace`
+    (add `--allow-code` at the end to allow `code()`). A long batch may need a larger `MCP_TOOL_TIMEOUT`.
 - **REPL:** `python -m formcode repl [--allow-code] [--root DIR]` reads the same commands from stdin. Used for tests and for clients without MCP.
 - **Script:** `python -m formcode run face.fc` replays a script. The scene file *is* a command script (final state, one line per node).
 

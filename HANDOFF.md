@@ -159,6 +159,20 @@ Medians of 3 runs on a busy machine (full table in PROTOCOL §9):
   fixed-lattice sampling would make it cacheable, but it changes the sense). A fit change spreads over the whole surface. Threads cap at
   ~3-5x (GIL); numba would be the next step (an optional extra, the user decides). Export still rebuilds the scene per slab worker.
 
+**Engine step E done (MCP server)**: `formcode/mcp_server.py`, `python -m formcode mcp [--allow-code] [--root DIR]`,
+optional extra `formcode[mcp]` (`mcp>=2.3`, the official SDK v2: `MCPServer`, a sync tool returning `CallToolResult`),
+`tests/test_mcp.py` (end to end over stdio with the SDK's `Client`, plus a REPL subprocess `look("all")`).
+- One tool, `formcode(commands)`; its description is the cheat sheet (1191 chars, ~300 tokens). Text reply = `Engine.do()`
+  unchanged; `look` images come back as base64 PNG image content (only from the root or the engine's temp dir); `error line`
+  replies set `isError`, `REVERTED` doesn't. A lock serializes calls (the SDK runs sync tools in threads).
+- Found: the SDK diverts fd 1 to stderr while serving, but prints buffered in `sys.stdout` (a `code()` sdf that prints)
+  were flushed onto the restored wire at exit ("Failed to parse JSONRPC message" in the client). Each call now redirects
+  `sys.stdout` to stderr; `test_mcp_stray_prints_stay_off_the_wire` fails without it.
+- `__main__.py` now runs under `if __name__ == "__main__":`. It was not actually broken for `python -m formcode`
+  (multiprocessing's spawn skips re-running `*.__main__` modules), but it is the standard guard.
+- Connect from Claude Code: `claude mcp add --transport stdio formcode -- D:/3dforLLM/.venv/Scripts/python.exe -m formcode mcp --root <workspace>` (PROTOCOL §8). Not yet tried from a real Claude Code session (PROTOCOL §10.1).
+- **Next: step F**: connect a real Claude Code session, rebuild the face through the protocol only and measure against session 1 (PROTOCOL §10).
+
 **Build plan for the engine (PROTOCOL.md §10 is the finish line):**
 - A. Core: a scene as named nodes, the command parser (`ast`, never exec), placement (`on`/`rel`/landmarks), build/edit commands, `.fc` save/open, REPL.
 - B. Automatic loop: checks, versions and revert per batch; auto-frame; the reply format; errors with fix hints.
@@ -175,7 +189,7 @@ Medians of 3 runs on a busy machine (full table in PROTOCOL §9):
 
 ## How to run things (Windows 11, Git Bash)
 - venv: `.venv` (Python 3.12, numpy, pillow, scipy, scikit-image, trimesh, pytest), created with `uv venv --python 3.12`;
-  `uv pip install --python .venv/Scripts/python.exe -e .` installs the package.
+  `uv pip install --python .venv/Scripts/python.exe -e .` installs the package (`-e ".[mcp]"` adds the MCP server).
 - Package (installed editable): `.venv/Scripts/python.exe -m formcode examples/face.py out.png [cx,cy,cz,half]`.
   An output path ending in `.glb` exports a mesh over the scene's FRAME. Tests: `.venv/Scripts/python.exe -m pytest -q`.
 - Old lab (frozen): `cd experiments/sdf_lab && ../../.venv/Scripts/python.exe lab.py dragon.py out.png` / `facelab.py face.py out.png`.

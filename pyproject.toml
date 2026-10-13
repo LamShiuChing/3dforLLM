@@ -9,6 +9,7 @@ dependencies = ["numpy", "pillow", "scipy"]
 [project.optional-dependencies]
 mesh = ["scikit-image", "trimesh"]
 dev = ["pytest"]
+mcp = ["mcp>=2.3"]
 
 [build-system]
 requires = ["setuptools>=77"]
